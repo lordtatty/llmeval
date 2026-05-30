@@ -1,0 +1,20 @@
+# golangci-lint v2 config — deliberately minimal.
+# Enable only linters that catch real bugs or surface high-value smells.
+# No style enforcement.
+
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet        # built-in go vet checks (printf, copylocks, etc.) — never controversial
+    - staticcheck  # broad bug catcher (replaces gosimple, stylecheck, unused)
+    - ineffassign  # ineffective assignments — pure bug detection
+    - errcheck     # unchecked errors — important for a library
+    - gocyclo      # cyclomatic complexity — surfaces functions that grew too big
+    - misspell     # typos — low-noise quality-of-life
+    - modernize    # suggest modern Go idioms (range over int, slices/maps stdlib funcs, etc.)
+
+  settings:
+    gocyclo:
+      min-complexity: 10  # most real functions stay well under; >10 is a code smell

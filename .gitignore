@@ -1,0 +1,16 @@
+# Claude Code harness state (per-session conversation data, never for git)
+.claude/
+
+# Working-notes / scratchpad — kept locally, not shipped.
+# Anything in notes/ stays out of the repo by default.
+notes/
+
+# Go test artifacts
+*.test
+*.out
+coverage.html
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
