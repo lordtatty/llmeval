@@ -1,0 +1,78 @@
+# CI — runs on every push to main and on every pull request.
+#
+# Two jobs run in parallel:
+#   1. test + coverage — go test (with race detector and coverage in one
+#      pass), the build-tagged example evals, and a guard that fails if
+#      library coverage drops below 100% statements
+#   2. golangci-lint — using the .golangci.yml config in the repo root
+#
+# Linux only; this is a pure Go library with no OS-specific paths.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least-privilege: this workflow only reads code, never writes to the repo,
+# comments, packages, etc. If any action got compromised, the blast radius
+# is limited to read-only operations.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref: if three commits land in quick
+# succession we only care about the latest. Saves CI minutes and queue time.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test + coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go test (race detector + coverage in one pass)
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: go test examples (build tag llmeval)
+        run: go test -tags=llmeval ./examples/...
+
+      - name: Library coverage must be 100%
+        run: |
+          # Inspect every library file's per-function coverage. Anything
+          # under 100% in the library (excluding examples/) is a fail.
+          gaps=$(go tool cover -func=coverage.out \
+            | grep -E '^github\.com/lordtatty/llmeval' \
+            | grep -v '/examples/' \
+            | grep -v '100\.0%') || true
+          if [ -n "$gaps" ]; then
+            echo "::error::Library coverage dropped below 100%"
+            echo "$gaps"
+            exit 1
+          fi
+          echo "Library packages at 100% coverage"
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
