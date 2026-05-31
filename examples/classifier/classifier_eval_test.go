@@ -7,7 +7,7 @@
 // Normal `go test ./...` skips this file (different build tag) — these are
 // the kind of calls you don't want billed accidentally.
 //
-// The five evals below progress from simplest to most realistic:
+// The six evals below progress from simplest to most realistic:
 //
 //   - TestClassify_LabelsPositive          — strict Equal on one Run
 //   - TestClassify_LabelsNegative          — same shape, negative case
@@ -15,6 +15,9 @@
 //   - TestClassify_AccuratePositive_WithDrift
 //                                          — multi-run, strict format + tolerant
 //                                            accuracy in the same eval
+//   - TestClassify_WithBudgetEnforcement   — MaxTokens + MaxCost PostChecks
+//                                            wired alongside assertions and
+//                                            a judged criterion
 //   - TestClassify_JudgedByFakeLLM         — local assertion + LLM-judged
 //                                            criteria in a single eval (the
 //                                            shape that makes the framework
@@ -83,6 +86,32 @@ func TestClassify_AccuratePositive_WithDrift(t *testing.T) {
 		Assertions: []llmeval.Assertion{
 			llmeval.AtLeast(0.6, llmeval.Equal("positive")), // accuracy: ≥60% labelled positive
 			llmeval.OneOf(validLabels...),                   // format: every output is a valid label
+		},
+	})
+}
+
+// Budget enforcement via PostCheck.
+//
+// Demonstrates the cost-tracking layer: the SUT and judge both record
+// stub Usage records (via llmeval.RecordUsage); MaxTokens caps the raw
+// token sum and MaxCost caps the dollar total resolved via a Pricer.
+//
+// In production swap classifier.StubPricer() for anthropic.Pricer() /
+// openai.Pricer() (or compose multiples) — the eval shape doesn't change.
+func TestClassify_WithBudgetEnforcement(t *testing.T) {
+	llmevaltest.Run(t, llmeval.Eval{
+		Run: func(ctx context.Context) (string, error) {
+			return classifier.Classify(ctx, "I love this product!")
+		},
+		Repeat:     5,
+		Assertions: []llmeval.Assertion{llmeval.OneOf(validLabels...)},
+		Judge:      classifier.FakeJudge{},
+		Criteria: []llmeval.Criterion{
+			{Description: "output is a single word"},
+		},
+		PostChecks: []llmeval.PostCheck{
+			llmeval.MaxTokens(1_000),                       // raw cap
+			llmeval.MaxCost(0.01, classifier.StubPricer()), // dollar cap
 		},
 	})
 }

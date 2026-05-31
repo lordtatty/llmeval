@@ -55,6 +55,24 @@ go test ./...
 The build tag means eval files don't compile into normal test runs — no
 accidental LLM calls, no surprise bills.
 
+## How an eval flows
+
+```
+   Eval ─► Run × Repeat ─► Aggregate ─► PostChecks ─► EvalResult
+
+   Inside each Run, both SUT and Judge can record Usage via ctx
+   (sub-module judges do it automatically; SUTs opt in with one call).
+```
+
+An `Eval` is declarative — what to run, how often, what to assert, what to judge, what budgets to enforce. The runner executes it in four phases:
+
+1. **Run × `Repeat` times** (up to `Concurrency` in parallel): for each Run, call `Run(ctx)`, apply each `Assertion` to the output, then call `Judge.Evaluate` once on all `Criteria` (the judge step is skipped when either `Judge` or `Criteria` is unset). SUTs record their own LLM token usage via `llmeval.RecordUsage(ctx, ...)`; sub-module judges (`anthropic.NewDefaultJudge`, `openai.NewDefaultJudge`) do it automatically.
+2. **Aggregate**: per-Assertion and per-Criterion pass rates, Usage summed by `(provider, model)`.
+3. **PostChecks** run against the aggregate — `MaxCost` for dollar budgets (fail-closed on unpriced calls), `MaxTokens` for raw quotas, or any user-supplied `PostCheck`.
+4. **Result**: `EvalResult` with `Pass` plus per-phase detail. `PrintText` / `PrintJSON` render it; `llmevaltest.Run` auto-logs the text report when the eval fails so debugging starts with full context.
+
+See [`examples/classifier/classifier_eval_test.go`](examples/classifier/classifier_eval_test.go) for a six-test walkthrough from simplest (one strict assertion) to most realistic (budget + LLM judge + multi-criterion).
+
 ## Wiring your LLM
 
 The core `llmeval` package has no SDK dependencies. For Anthropic and

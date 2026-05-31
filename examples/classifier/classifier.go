@@ -10,7 +10,13 @@ import (
 	"context"
 	"math/rand/v2"
 	"strings"
+
+	"github.com/lordtatty/llmeval"
 )
+
+// ProviderName tags the simulated usage records this package emits so the
+// budget-enforcement example can resolve a price for them via Pricer.
+const ProviderName = "stub"
 
 // Classify returns "positive", "negative", or "neutral" for the given text.
 //
@@ -20,7 +26,12 @@ import (
 //	 'positive', 'negative', or 'neutral'. Reply with one word only.\n\n" + text
 //
 // In real code: out, err := myLLMClient.Complete(ctx, prompt) ...
-func Classify(_ context.Context, text string) (string, error) {
+//
+// Records a fake Usage so the cost-tracking example downstream has
+// something to add up; real SUTs call llmeval.RecordUsage with the token
+// counts their LLM client returned.
+func Classify(ctx context.Context, text string) (string, error) {
+	recordStubUsage(ctx, text, 1) // 1 output token (the label)
 	lower := strings.ToLower(text)
 	if containsAny(lower, "love", "great", "amazing", "excellent", "wonderful") {
 		return "positive", nil
@@ -41,6 +52,18 @@ func FlakyClassify(ctx context.Context, text string) (string, error) {
 	}
 	labels := []string{"positive", "negative", "neutral"}
 	return labels[rand.IntN(3)], nil
+}
+
+// recordStubUsage simulates "I called an LLM and it returned these tokens"
+// by counting words of input. Used by the SUT and FakeJudge so the example
+// has Usage records to feed into MaxCost / MaxTokens.
+func recordStubUsage(ctx context.Context, input string, outputTokens int) {
+	llmeval.RecordUsage(ctx, llmeval.Usage{
+		Provider:     ProviderName,
+		Model:        "classifier-v1",
+		InputTokens:  len(strings.Fields(input)),
+		OutputTokens: outputTokens,
+	})
 }
 
 func containsAny(s string, terms ...string) bool {
