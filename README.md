@@ -217,6 +217,7 @@ go test -tags=llmeval ./examples/... -v
 - `llmeval.Judge` / `Criterion` / `PromptedJudge` — batched LLM-as-judge: one LLM call per Run, N criteria, N verdicts back
 - Pluggable response format: default `PrefixVerdictParser` (PASS/FAIL prefix) or `JSONVerdictParser` + `JSONPromptTemplate` (for structured-output-capable LLMs)
 - `llmeval/anthropic.NewJudge` / `llmeval/openai.NewJudge` — opt-in pre-wired judges in sub-modules so the core stays SDK-free
+- `llmeval/judgetest` — curated `Cases` + `AssertCase(t, judge, c)` helper for live prompt-quality tests against any `llmeval.Judge` implementation
 - `llmeval.Run` — single-eval runner (no `testing` dependency)
 - `llmevaltest.Run` / `llmevaltest.RequireSuccess` — `testing.T` integration in a subpackage
 - Per-assertion + per-criterion pass-rate aggregation across `Repeat` runs

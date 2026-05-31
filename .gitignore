@@ -16,6 +16,11 @@ coverage.html
 go.work
 go.work.sum
 
+# Local API keys for live LLM tests (`-tags=llmlive`). Never commit these.
+# See .env.example for the expected keys.
+.env
+.env.local
+
 # Editor / OS noise
 .DS_Store
 .idea/
