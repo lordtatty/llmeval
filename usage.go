@@ -89,21 +89,39 @@ func NewUsageCtx(ctx context.Context) (context.Context, *UsageCollector) {
 }
 
 // TotalCost sums dollar cost across usages. For each Usage, pricers are
-// tried in order; the first that returns ok=true wins. Usages with no
-// matching pricer contribute $0 — provide your own Pricer to cover them
-// or to override a sub-module's default rate (the user-supplied pricer
-// runs first because it's earlier in the list).
+// tried in order; the first that returns ok=true wins. nil pricers in the
+// variadic are skipped. Usages with no matching pricer contribute $0 —
+// provide your own Pricer to cover them or to override a sub-module's
+// default rate (the user-supplied pricer runs first because it's earlier
+// in the list). To detect unpriced usages (e.g. for budget enforcement),
+// use MaxCost which fails closed in that case.
 func TotalCost(usages []Usage, pricers ...Pricer) float64 {
-	var total float64
+	total, _ := costBreakdown(usages, pricers)
+	return total
+}
+
+// costBreakdown is the shared cost-resolution loop. Returns the dollar
+// total of priced usages and the count of usages no pricer matched.
+// Unexported because the (total, unpriced) split is an internal detail
+// MaxCost uses to fail closed; TotalCost discards the unpriced count.
+func costBreakdown(usages []Usage, pricers []Pricer) (total float64, unpriced int) {
 	for _, u := range usages {
+		matched := false
 		for _, p := range pricers {
+			if p == nil {
+				continue
+			}
 			if c, ok := p(u); ok {
 				total += c
+				matched = true
 				break
 			}
 		}
+		if !matched {
+			unpriced++
+		}
 	}
-	return total
+	return total, unpriced
 }
 
 // Price is the per-million-token rate pair (input, output) in USD for one

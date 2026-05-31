@@ -142,6 +142,13 @@ func TestTotalCostStopsAtTheFirstMatchingPricerEvenIfLaterOnesWouldAlsoMatch(t *
 	assert.InDelta(t, 0.01, total, 1e-9)
 }
 
+func TestTotalCostSkipsNilPricersInTheVariadic(t *testing.T) {
+	// A nil entry shouldn't panic; it's treated as if absent.
+	pricer := func(_ llmeval.Usage) (float64, bool) { return 0.05, true }
+	total := llmeval.TotalCost([]llmeval.Usage{{Provider: "p"}}, nil, pricer)
+	assert.InDelta(t, 0.05, total, 1e-9)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Price + NewPricer
 // ─────────────────────────────────────────────────────────────────────────────

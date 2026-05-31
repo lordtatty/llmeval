@@ -306,3 +306,52 @@ func TestPrintJSONIncludesUsageField(t *testing.T) {
 	assert.Equal(t, "openai", decoded.Usage[0].Provider)
 	assert.Equal(t, 1, decoded.Usage[0].InputTokens)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Post-checks section
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestPrintTextWritesPostChecksSectionWhenPresent(t *testing.T) {
+	r := sampleResult()
+	r.PostChecks = []llmeval.PostCheckResult{
+		{Name: "max cost: $0.10", Pass: false, Reason: "spent $0.2500, limit $0.1000"},
+		{Name: "always-ok", Pass: true},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, llmeval.PrintText(&buf, r))
+
+	s := buf.String()
+	assert.Contains(t, s, "Post-checks:")
+	assert.Contains(t, s, "FAIL  max cost: $0.10")
+	assert.Contains(t, s, "spent $0.2500, limit $0.1000")
+	assert.Contains(t, s, "PASS  always-ok")
+}
+
+func TestPrintTextOmitsPostChecksSectionWhenAbsent(t *testing.T) {
+	r := sampleResult()
+	r.PostChecks = nil
+
+	var buf bytes.Buffer
+	require.NoError(t, llmeval.PrintText(&buf, r))
+
+	assert.NotContains(t, buf.String(), "Post-checks:")
+}
+
+func TestPrintJSONIncludesPostChecksField(t *testing.T) {
+	r := sampleResult()
+	r.PostChecks = []llmeval.PostCheckResult{
+		{Name: "n", Pass: false, Reason: "why"},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, llmeval.PrintJSON(&buf, r))
+
+	var decoded struct {
+		PostChecks []llmeval.PostCheckResult `json:"postChecks"`
+	}
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
+	require.Len(t, decoded.PostChecks, 1)
+	assert.Equal(t, "n", decoded.PostChecks[0].Name)
+	assert.Equal(t, "why", decoded.PostChecks[0].Reason)
+}

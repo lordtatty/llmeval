@@ -227,3 +227,4 @@ go test -tags=llmeval ./examples/... -v
 - `llmevaltest.WithReporter` — swap the auto-log reporter (pass `nil` to silence)
 - `llmeval.RecordUsage` / `llmeval.Usage` / `llmeval.NewUsageCtx` — track token usage from every LLM call (judge calls are recorded automatically by the sub-modules; SUT code records its own with one line); aggregated by `(provider, model)` into `EvalResult.Usage`
 - `llmeval.TotalCost` + sub-module `Pricer()` — estimate dollar cost from recorded usage; sub-modules ship internal best-effort price tables, override by passing your own `llmeval.Pricer` earlier in the `TotalCost` call (first match wins)
+- `Eval.PostChecks` + `llmeval.PostCheck` / `llmeval.MaxCost(limit, pricers...)` — policy checks that run once after aggregation with full access to the result; `MaxCost` is the canonical budget assertion. A failed `PostCheck` marks the eval failed and `llmevaltest.Run` surfaces the failure via `t.Errorf`.

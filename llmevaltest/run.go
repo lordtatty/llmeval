@@ -107,6 +107,12 @@ func RequireSuccess(t TestingT, result llmeval.EvalResult, opts ...Option) {
 				criterionFailureDetails(result.Runs, j))
 		}
 	}
+	for _, pc := range result.PostChecks {
+		if !pc.Pass {
+			t.Errorf("eval %q: post-check %q failed%s",
+				result.Name, pc.Name, reasonSuffix("", pc.Reason))
+		}
+	}
 }
 
 // assertionFailureDetails returns a "\n  run N: <output> — <reason>" line for

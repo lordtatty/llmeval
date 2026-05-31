@@ -57,6 +57,12 @@ type Eval struct {
 	// is I/O-bound (e.g. an LLM call). Run and Judge must be safe to invoke
 	// concurrently when set > 1.
 	Concurrency int
+
+	// PostChecks fire once after all runs and judges complete, with access
+	// to the fully aggregated EvalResult. Use for budget assertions (see
+	// MaxCost) and other policy checks that operate on the eval as a whole.
+	// A failed PostCheck marks EvalResult.Pass false.
+	PostChecks []PostCheck
 }
 
 // Assertion is a single check against the SUT output. The runner calls Check
@@ -111,6 +117,10 @@ type EvalResult struct {
 	// eval made no recorded calls — sub-module judges record
 	// automatically; SUT code records via RecordUsage(ctx, ...).
 	Usage []Usage `json:"usage,omitempty"`
+
+	// PostChecks holds the outcome of each Eval.PostCheck, in the order
+	// they were declared. Empty when the eval defined no PostChecks.
+	PostChecks []PostCheckResult `json:"postChecks,omitempty"`
 }
 
 // CriterionRate aggregates a single judged criterion across an eval's Repeat runs.
@@ -272,7 +282,24 @@ func Run(ctx context.Context, eval Eval) EvalResult {
 		}
 	}
 	result.Usage = collector.Aggregated()
+	applyPostChecks(&result, eval.PostChecks)
 	return result
+}
+
+// applyPostChecks runs each PostCheck against the aggregated result and
+// records the outcomes. A failed PostCheck marks result.Pass false.
+// Separated from Run because PostChecks are a distinct phase (operating
+// on the whole aggregate), not a substep of any single Run.
+func applyPostChecks(result *EvalResult, checks []PostCheck) {
+	for _, pc := range checks {
+		pass, reason := pc.Check(*result)
+		result.PostChecks = append(result.PostChecks, PostCheckResult{
+			Name: pc.Name, Pass: pass, Reason: reason,
+		})
+		if !pass {
+			result.Pass = false
+		}
+	}
 }
 
 // runAll executes the eval's Run closure up to `repeat` times with at most

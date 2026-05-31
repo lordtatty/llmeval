@@ -255,6 +255,25 @@ func TestErroredRunsAreNotReportedAsCriterionFailures(t *testing.T) {
 	assert.Contains(t, r.messages[0], "judge says no")
 }
 
+// ── Failed PostCheck reporting ─────────────────────────────────────────────
+
+func TestRequireSuccessReportsOneErrorPerFailedPostCheck(t *testing.T) {
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+		Name: "demo",
+		Pass: false,
+		PostChecks: []llmeval.PostCheckResult{
+			{Name: "max cost: $0.10", Pass: false, Reason: "spent $0.20, limit $0.10"},
+			{Name: "always-ok", Pass: true}, // passing → no Errorf
+		},
+	})
+
+	require.Len(t, r.messages, 1)
+	assert.Contains(t, r.messages[0], `post-check "max cost: $0.10" failed`)
+	assert.Contains(t, r.messages[0], `spent $0.20, limit $0.10`)
+}
+
 // ── Auto-log on failure ────────────────────────────────────────────────────
 
 func TestRequireSuccessAutoLogsPrintTextOnFailure(t *testing.T) {

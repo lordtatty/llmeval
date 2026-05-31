@@ -44,6 +44,14 @@ func PrintText(w io.Writer, result EvalResult) error {
 			)
 		}
 	}
+	if len(result.PostChecks) > 0 {
+		e.printf("\nPost-checks:\n")
+		for _, pc := range result.PostChecks {
+			e.printf("  %s  %s%s\n",
+				passLabel(pc.Pass), pc.Name, reasonSuffix(pc.Reason),
+			)
+		}
+	}
 	return e.err
 }
 
