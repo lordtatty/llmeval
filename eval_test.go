@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -111,6 +113,152 @@ func TestParentCtxCancellationAbortsRemainingRepeats(t *testing.T) {
 	})
 
 	assert.Len(t, result.Runs, 1, "loop should stop after first iteration sees ctx.Err")
+}
+
+// ── Concurrency ─────────────────────────────────────────────────────────────
+
+func TestConcurrencyRunsInParallelWhenSet(t *testing.T) {
+	// All n SUT calls must be in flight simultaneously — they each push on
+	// `started` and block on `release`. If the runner is sequential, the
+	// second `started` send never arrives and the timeout fires.
+	const n = 5
+	started := make(chan struct{}, n)
+	release := make(chan struct{})
+
+	done := make(chan llmeval.EvalResult, 1)
+	go func() {
+		done <- llmeval.Run(context.Background(), llmeval.Eval{
+			Repeat:      n,
+			Concurrency: n,
+			Run: func(context.Context) (string, error) {
+				started <- struct{}{}
+				<-release
+				return "x", nil
+			},
+		})
+	}()
+
+	for range n {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			close(release)
+			t.Fatal("not all runs reached the barrier — concurrency didn't happen")
+		}
+	}
+	close(release)
+
+	result := <-done
+	assert.Len(t, result.Runs, n)
+}
+
+func TestConcurrencyDoesNotExceedTheConfiguredLimit(t *testing.T) {
+	const repeat = 20
+	const limit = 4
+	var inFlight, peak atomic.Int32
+
+	result := llmeval.Run(context.Background(), llmeval.Eval{
+		Repeat:      repeat,
+		Concurrency: limit,
+		Run: func(context.Context) (string, error) {
+			cur := inFlight.Add(1)
+			for {
+				p := peak.Load()
+				if cur <= p || peak.CompareAndSwap(p, cur) {
+					break
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+			inFlight.Add(-1)
+			return "x", nil
+		},
+	})
+
+	assert.Len(t, result.Runs, repeat)
+	assert.LessOrEqual(t, peak.Load(), int32(limit), "peak in-flight exceeded the configured limit")
+}
+
+func TestConcurrencyProducesADistinctResultPerRepeat(t *testing.T) {
+	// Each Run returns a unique string. Slot clobbering (two goroutines
+	// writing the same runs[idx]) would surface as a duplicate or missing
+	// output here.
+	const n = 50
+	var id atomic.Int32
+
+	result := llmeval.Run(context.Background(), llmeval.Eval{
+		Repeat:      n,
+		Concurrency: 8,
+		Run: func(context.Context) (string, error) {
+			return fmt.Sprintf("%d", id.Add(1)), nil
+		},
+	})
+
+	require.Len(t, result.Runs, n)
+	seen := make(map[string]bool)
+	for _, r := range result.Runs {
+		require.False(t, seen[r.Output], "duplicate output: %s", r.Output)
+		seen[r.Output] = true
+	}
+	assert.Len(t, seen, n)
+}
+
+func TestConcurrencyHandlesConcurrencyGreaterThanRepeat(t *testing.T) {
+	result := llmeval.Run(context.Background(), llmeval.Eval{
+		Repeat:      3,
+		Concurrency: 10,
+		Run:         func(context.Context) (string, error) { return "x", nil },
+		Assertions:  []llmeval.Assertion{llmeval.Equal("x")},
+	})
+
+	assert.True(t, result.Pass, "result=%+v", result)
+	assert.Len(t, result.Runs, 3)
+}
+
+func TestConcurrencyRespectsParentCtxCancellation(t *testing.T) {
+	// Parallel variant: the first SUT call cancels the parent ctx. The
+	// runner must stop spawning new repeats; what's already in flight may
+	// finish or error. We assert the result is bounded by the in-flight
+	// batch (≤ Concurrency) and strictly less than Repeat.
+	const repeat = 20
+	const concurrency = 4
+	ctx, cancel := context.WithCancel(context.Background())
+	var once sync.Once
+
+	result := llmeval.Run(ctx, llmeval.Eval{
+		Repeat:      repeat,
+		Concurrency: concurrency,
+		Run: func(context.Context) (string, error) {
+			once.Do(cancel)
+			return "x", nil
+		},
+	})
+
+	// Up to `concurrency` goroutines may already be mid-runOnce when the
+	// cancel fires (they passed the post-acquire ctx check before the
+	// canceller ran), and they're allowed to finish. Anything spawned
+	// after their sem slots free will short-circuit on the re-check.
+	assert.LessOrEqual(t, len(result.Runs), concurrency)
+	assert.Less(t, len(result.Runs), repeat, "some repeats should have been skipped")
+}
+
+func TestConcurrencyRecoversSUTPanicsInEachGoroutine(t *testing.T) {
+	// Each parallel goroutine calls runOnce, which has its own deferred
+	// recover. A panic in one SUT call must not take down the runner or
+	// affect any other in-flight goroutine.
+	const repeat = 8
+	result := llmeval.Run(context.Background(), llmeval.Eval{
+		Repeat:      repeat,
+		Concurrency: 4,
+		Run:         func(context.Context) (string, error) { panic("boom") },
+		Assertions:  []llmeval.Assertion{llmeval.Equal("x")},
+	})
+
+	require.Len(t, result.Runs, repeat)
+	for i, r := range result.Runs {
+		require.Error(t, r.Err, "run %d should have errored", i)
+		assert.Contains(t, r.Err.Error(), "boom")
+	}
+	assert.False(t, result.Pass)
 }
 
 // ── ExampleRun (godoc example, runs under go test) ─────────────────────────

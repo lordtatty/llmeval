@@ -221,8 +221,8 @@ go test -tags=llmeval ./examples/... -v
 - `llmevaltest.Run` / `llmevaltest.RequireSuccess` — `testing.T` integration in a subpackage
 - Per-assertion + per-criterion pass-rate aggregation across `Repeat` runs
 - Per-`Eval.Timeout` via `context.WithTimeout`, panic recovery in the SUT
+- `Eval.Concurrency` — cap on parallel Run invocations (default 1 = sequential)
 
 ## Coming soon
 
-- `WithConcurrency`, `WithOutput` options
 - `PrintText`, `PrintJSON` reporting

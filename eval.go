@@ -9,6 +9,7 @@ package llmeval
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -46,6 +47,12 @@ type Eval struct {
 	// Timeout, if non-zero, caps each individual Run call via
 	// context.WithTimeout. The user's Run must respect ctx for this to fire.
 	Timeout time.Duration
+
+	// Concurrency caps how many Run invocations may be in flight at once.
+	// Defaults to 1 (sequential). Set > 1 for parallel runs when each Run
+	// is I/O-bound (e.g. an LLM call). Run and Judge must be safe to invoke
+	// concurrently when set > 1.
+	Concurrency int
 }
 
 // Assertion is a single check against the SUT output. The runner calls Check
@@ -166,23 +173,25 @@ type RunResult struct {
 }
 
 // Run executes eval and returns the aggregated result. It invokes eval.Run
-// `Repeat` times (or once if Repeat < 1), applies every assertion to each
-// non-erroring output, and computes per-assertion pass rates.
+// `Repeat` times (or once if Repeat < 1) with up to `Concurrency` invocations
+// in flight (or sequentially if Concurrency < 2), applies every assertion to
+// each non-erroring output, and computes per-assertion pass rates.
 //
 // Run does not depend on the testing package. For `go test` integration use
 // llmevaltest.Run, which wraps Run and reports failures via *testing.T.
 func Run(ctx context.Context, eval Eval) EvalResult {
 	repeat := max(eval.Repeat, 1)
+	concurrency := max(eval.Concurrency, 1)
 	result := EvalResult{Name: eval.Name}
 	assTallies := newCheckTallies(len(eval.Assertions))
 	critTallies := newCheckTallies(len(eval.Criteria))
 
-	for range repeat {
-		if ctx.Err() != nil {
-			// Parent ctx cancelled — finish whatever's running, don't start more.
-			break
+	runs, ran := runAll(ctx, eval, repeat, concurrency)
+
+	for i, rr := range runs {
+		if !ran[i] {
+			continue
 		}
-		rr := runOnce(ctx, eval)
 		result.Runs = append(result.Runs, rr)
 		if rr.Err != nil {
 			continue
@@ -215,6 +224,40 @@ func Run(ctx context.Context, eval Eval) EvalResult {
 		}
 	}
 	return result
+}
+
+// runAll executes the eval's Run closure up to `repeat` times with at most
+// `concurrency` invocations in flight. Each goroutine writes into its own
+// runs[idx] slot and sets ran[idx] true on completion; slots whose goroutine
+// short-circuited (ctx cancelled) stay zero-valued and ran[idx] false, so
+// the caller can distinguish "didn't run" from "ran and returned empty".
+func runAll(ctx context.Context, eval Eval, repeat, concurrency int) ([]RunResult, []bool) {
+	runs := make([]RunResult, repeat)
+	ran := make([]bool, repeat)
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+
+	for i := range repeat {
+		if ctx.Err() != nil {
+			// Parent ctx cancelled — finish whatever's running, don't start more.
+			break
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			// Re-check after slot acquisition: ctx may have been cancelled
+			// while this goroutine was blocked waiting for a free slot.
+			if ctx.Err() != nil {
+				return
+			}
+			runs[idx] = runOnce(ctx, eval)
+			ran[idx] = true
+		}(i)
+	}
+	wg.Wait()
+	return runs, ran
 }
 
 // checkTallies accumulates per-check pass/total counts across an eval's Runs.
