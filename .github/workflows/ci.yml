@@ -82,16 +82,23 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - uses: golangci/golangci-lint-action@v8
+      # Each module needs its own action invocation because the v8 action
+      # doesn't expose the binary on PATH for subsequent steps — it runs
+      # internally per call.
+      - name: Lint main module
+        uses: golangci/golangci-lint-action@v8
         with:
           version: v2.12.2
+          working-directory: .
 
-      - name: Lint sub-modules
-        run: |
-          set -uo pipefail
-          fail=0
-          for dir in anthropic openai; do
-            echo "==> lint $dir"
-            (cd "$dir" && $(go env GOPATH)/bin/golangci-lint run ./...) || fail=1
-          done
-          exit $fail
+      - name: Lint anthropic sub-module
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          working-directory: anthropic
+
+      - name: Lint openai sub-module
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          working-directory: openai
