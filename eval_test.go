@@ -2,6 +2,7 @@ package llmeval_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -259,6 +260,54 @@ func TestConcurrencyRecoversSUTPanicsInEachGoroutine(t *testing.T) {
 		assert.Contains(t, r.Err.Error(), "boom")
 	}
 	assert.False(t, result.Pass)
+}
+
+// ── RunResult.MarshalJSON ──────────────────────────────────────────────────
+
+func TestRunResultMarshalJSONOmitsErrFieldWhenNil(t *testing.T) {
+	data, err := json.Marshal(llmeval.RunResult{Output: "ok", Pass: true})
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), `"err"`)
+}
+
+func TestRunResultMarshalJSONRendersErrAsAString(t *testing.T) {
+	data, err := json.Marshal(llmeval.RunResult{Err: errors.New("rate limited")})
+	require.NoError(t, err)
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	assert.Equal(t, "rate limited", decoded["err"])
+}
+
+func TestRunResultMarshalJSONConvertsDurationToMilliseconds(t *testing.T) {
+	data, err := json.Marshal(llmeval.RunResult{Duration: 1234 * time.Millisecond})
+	require.NoError(t, err)
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	assert.Equal(t, float64(1234), decoded["durationMs"])
+}
+
+func TestRunResultMarshalJSONPreservesAssertionsAndCriteria(t *testing.T) {
+	data, err := json.Marshal(llmeval.RunResult{
+		Output:     "x",
+		Pass:       false,
+		Assertions: []llmeval.AssertionResult{{Pass: false, Reason: "nope"}},
+		Criteria:   []llmeval.CriterionResult{{Pass: true, Reason: "ok"}},
+	})
+	require.NoError(t, err)
+
+	var decoded struct {
+		Output     string                       `json:"output"`
+		Pass       bool                         `json:"pass"`
+		Assertions []llmeval.AssertionResult    `json:"assertions"`
+		Criteria   []llmeval.CriterionResult    `json:"criteria"`
+	}
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	assert.Equal(t, "x", decoded.Output)
+	assert.False(t, decoded.Pass)
+	assert.Equal(t, "nope", decoded.Assertions[0].Reason)
+	assert.Equal(t, "ok", decoded.Criteria[0].Reason)
 }
 
 // ── ExampleRun (godoc example, runs under go test) ─────────────────────────

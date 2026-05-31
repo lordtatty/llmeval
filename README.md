@@ -223,7 +223,5 @@ go test -tags=llmeval ./examples/... -v
 - Per-assertion + per-criterion pass-rate aggregation across `Repeat` runs
 - Per-`Eval.Timeout` via `context.WithTimeout`, panic recovery in the SUT
 - `Eval.Concurrency` — cap on parallel Run invocations (default 1 = sequential)
-
-## Coming soon
-
-- `PrintText`, `PrintJSON` reporting
+- `llmeval.PrintText` / `llmeval.PrintJSON` — render an `EvalResult` as a human report or stable-shape JSON; `llmevaltest.Run` auto-logs the text report on failure so debugging starts with full per-run detail
+- `llmevaltest.WithReporter` — swap the auto-log reporter (pass `nil` to silence)

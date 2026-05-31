@@ -17,7 +17,9 @@
 package llmevaltest
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -30,37 +32,66 @@ import (
 type TestingT interface {
 	Helper()
 	Errorf(format string, args ...any)
+	Log(args ...any)
 }
 
 // outputTruncateLimit caps how much of each SUT output we splice into the
 // failure message. Long LLM responses would otherwise dominate the test log.
 const outputTruncateLimit = 200
 
+// Option configures Run / RequireSuccess.
+type Option func(*config)
+
+type config struct {
+	// reporter writes the failure-detail report. Nil silences auto-logging.
+	reporter func(io.Writer, llmeval.EvalResult) error
+}
+
+// WithReporter overrides the failure-detail reporter used by Run /
+// RequireSuccess on a failing eval. The default is llmeval.PrintText. Pass
+// nil to silence the auto-log entirely.
+func WithReporter(fn func(io.Writer, llmeval.EvalResult) error) Option {
+	return func(c *config) { c.reporter = fn }
+}
+
 // Run runs eval and marks t failed via t.Errorf if any assertion did not
 // meet its MinPassRate. If eval.Name is empty it defaults to t.Name().
 // The eval inherits t.Context() so it's cancelled automatically when the
-// test ends. The returned EvalResult lets callers inspect details after.
-func Run(t *testing.T, eval llmeval.Eval) llmeval.EvalResult {
+// test ends. On failure the configured reporter (default llmeval.PrintText)
+// is written to t.Log before the per-assertion failure messages, so
+// debugging starts with full per-run detail. The returned EvalResult lets
+// callers inspect details after.
+func Run(t *testing.T, eval llmeval.Eval, opts ...Option) llmeval.EvalResult {
 	t.Helper()
 	if eval.Name == "" {
 		eval.Name = t.Name()
 	}
 	result := llmeval.Run(t.Context(), eval)
-	RequireSuccess(t, result)
+	RequireSuccess(t, result, opts...)
 	return result
 }
 
 // RequireSuccess marks t failed via t.Errorf for each assertion and each
-// judged criterion in result that didn't meet its MinPassRate. Each
-// failure message includes per-failed-run detail: the Run index, the SUT
-// output (truncated), and the Reason recorded for that Run.
+// judged criterion in result that didn't meet its MinPassRate. Before
+// the failure messages it writes the configured reporter (default
+// llmeval.PrintText) to t.Log so the failing test's output includes the
+// full per-run detail.
 //
 // Run calls this automatically; you only need it when you've called
 // llmeval.Run directly.
-func RequireSuccess(t TestingT, result llmeval.EvalResult) {
+func RequireSuccess(t TestingT, result llmeval.EvalResult, opts ...Option) {
 	t.Helper()
 	if result.Pass {
 		return
+	}
+	cfg := config{reporter: llmeval.PrintText}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	if cfg.reporter != nil {
+		var buf bytes.Buffer
+		_ = cfg.reporter(&buf, result)
+		t.Log(buf.String())
 	}
 	for i, a := range result.Assertions {
 		if !a.Pass {

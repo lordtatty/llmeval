@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -16,11 +17,12 @@ import (
 	"github.com/lordtatty/llmeval/llmevaltest/mocks"
 )
 
-// errorfRecorder is a TestingT mock that captures the formatted message of
-// every Errorf call so the test can inspect its shape (substring checks,
-// ordering) rather than configuring exact-argument expectations on mockery.
+// errorfRecorder is a TestingT mock that captures both Errorf failure
+// messages and Log auto-report payloads so tests can inspect shape and
+// ordering without configuring exact-argument expectations on mockery.
 type errorfRecorder struct {
 	messages []string
+	logs     []string
 	T        *mocks.MockTestingT
 }
 
@@ -30,6 +32,10 @@ func captureErrorfMessages(t *testing.T) *errorfRecorder {
 	r.T.EXPECT().Errorf(mock.AnythingOfType("string"), mock.Anything).
 		Run(func(format string, args ...any) {
 			r.messages = append(r.messages, fmt.Sprintf(format, args...))
+		}).Maybe()
+	r.T.EXPECT().Log(mock.Anything).
+		Run(func(args ...any) {
+			r.logs = append(r.logs, fmt.Sprint(args...))
 		}).Maybe()
 	return r
 }
@@ -53,6 +59,15 @@ func TestRunDefaultsTheEvalNameToTName(t *testing.T) {
 		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
 	})
 	assert.Equal(t, t.Name(), result.Name)
+}
+
+func TestRunPreservesAUserSuppliedEvalName(t *testing.T) {
+	result := llmevaltest.Run(t, llmeval.Eval{
+		Name:       "my custom name",
+		Run:        func(context.Context) (string, error) { return "x", nil },
+		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
+	})
+	assert.Equal(t, "my custom name", result.Name)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -238,6 +253,64 @@ func TestErroredRunsAreNotReportedAsCriterionFailures(t *testing.T) {
 	assert.NotContains(t, r.messages[0], "SUT exploded")
 	assert.Contains(t, r.messages[0], "run 2")
 	assert.Contains(t, r.messages[0], "judge says no")
+}
+
+// ── Auto-log on failure ────────────────────────────────────────────────────
+
+func TestRequireSuccessAutoLogsPrintTextOnFailure(t *testing.T) {
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+		Name: "demo",
+		Pass: false,
+		Assertions: []llmeval.AssertionRate{
+			{Name: "a", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
+		},
+		Runs: []llmeval.RunResult{
+			{Output: "x", Assertions: []llmeval.AssertionResult{{Pass: false, Reason: "nope"}}},
+		},
+	})
+
+	require.Len(t, r.logs, 1)
+	// PrintText's header reaches the log, so debugging starts with context.
+	assert.Contains(t, r.logs[0], "Eval: demo")
+	assert.Contains(t, r.logs[0], "FAIL")
+}
+
+func TestWithReporterReplacesTheDefaultReporter(t *testing.T) {
+	r := captureErrorfMessages(t)
+	called := false
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+		Pass: false,
+		Assertions: []llmeval.AssertionRate{
+			{Name: "a", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
+		},
+	}, llmevaltest.WithReporter(func(w io.Writer, _ llmeval.EvalResult) error {
+		called = true
+		_, err := w.Write([]byte("custom report"))
+		return err
+	}))
+
+	assert.True(t, called, "custom reporter should have been invoked")
+	require.Len(t, r.logs, 1)
+	assert.Contains(t, r.logs[0], "custom report")
+}
+
+func TestWithReporterNilSilencesTheAutoLog(t *testing.T) {
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+		Pass: false,
+		Assertions: []llmeval.AssertionRate{
+			{Name: "a", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
+		},
+	}, llmevaltest.WithReporter(nil))
+
+	assert.Empty(t, r.logs, "WithReporter(nil) should suppress the auto-log")
+	// Failure messages still fire — silencing is about the report, not the
+	// per-assertion error signal.
+	assert.NotEmpty(t, r.messages)
 }
 
 // ── Empty-reason handling ───────────────────────────────────────────────────

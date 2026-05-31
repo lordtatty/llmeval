@@ -8,6 +8,7 @@ package llmeval
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -75,101 +76,128 @@ type Assertion interface {
 // AssertionResult is the outcome of a single Assertion.Check call.
 type AssertionResult struct {
 	// Pass is true if the predicate held for this output.
-	Pass bool
+	Pass bool `json:"pass"`
 
 	// Reason explains a failure. Empty when Pass is true.
-	Reason string
+	Reason string `json:"reason,omitempty"`
 }
 
 // EvalResult is the aggregate outcome of one Eval execution (all repeats).
 type EvalResult struct {
 	// Name is the eval's name (or t.Name() under RunTest).
-	Name string
+	Name string `json:"name,omitempty"`
 
 	// Runs holds one RunResult per repeat, in execution order. Failed Runs
 	// (Err != nil) appear here too but don't contribute to assertion rates.
-	Runs []RunResult
+	Runs []RunResult `json:"runs,omitempty"`
 
 	// Assertions aggregates each assertion across all Runs. Nil when no
 	// assertions were defined.
-	Assertions []AssertionRate
+	Assertions []AssertionRate `json:"assertions,omitempty"`
 
 	// Criteria aggregates each judged criterion across all Runs. Nil when
 	// no Judge+Criteria were defined.
-	Criteria []CriterionRate
+	Criteria []CriterionRate `json:"criteria,omitempty"`
 
 	// Pass is true only if every AssertionRate.Pass AND every
 	// CriterionRate.Pass is true.
-	Pass bool
+	Pass bool `json:"pass"`
 }
 
 // CriterionRate aggregates a single judged criterion across an eval's Repeat runs.
 type CriterionRate struct {
 	// Description is the Criterion.Description at eval-build time.
-	Description string
+	Description string `json:"description"`
 
 	// Passed is the number of Runs in which the judge returned Pass=true
 	// for this criterion.
-	Passed int
+	Passed int `json:"passed"`
 
 	// Total is the number of Runs in which this criterion was evaluated.
 	// Runs that errored before assertions/judging ran don't count here;
 	// runs where the judge itself errored DO count and contribute to Total
 	// (as failures), so judge instability is visible in the rate.
-	Total int
+	Total int `json:"total"`
 
 	// MinRate is the Criterion.MinPassRate from the input Criterion (where
 	// 0 means strict, i.e. effectively 1.0 — applied at runtime).
-	MinRate float64
+	MinRate float64 `json:"minRate"`
 
 	// Pass is true if Passed/Total >= effective MinRate (and Total > 0).
-	Pass bool
+	Pass bool `json:"pass"`
 }
 
 // AssertionRate aggregates a single assertion across an eval's Repeat runs.
 type AssertionRate struct {
 	// Name is the assertion's Name() at the time the eval was built.
-	Name string
+	Name string `json:"name"`
 
 	// Passed is the number of Runs in which this assertion returned Pass=true.
-	Passed int
+	Passed int `json:"passed"`
 
 	// Total is the number of Runs in which this assertion was evaluated.
 	// Runs that errored before assertions ran (Err != nil) don't count here.
-	Total int
+	Total int `json:"total"`
 
 	// MinRate is the threshold this assertion needed to meet, copied from
 	// Assertion.MinPassRate() at runtime.
-	MinRate float64
+	MinRate float64 `json:"minRate"`
 
 	// Pass is true if Passed/Total >= MinRate (and Total > 0).
-	Pass bool
+	Pass bool `json:"pass"`
 }
 
 // RunResult is the outcome of a single Run (one repeat).
 type RunResult struct {
 	// Output is what Eval.Run returned. Empty if Err != nil.
-	Output string
+	Output string `json:"output,omitempty"`
 
 	// Assertions holds the per-assertion outcome for this Run, in the same
 	// order as Eval.Assertions. Empty when Err != nil (assertions are skipped).
-	Assertions []AssertionResult
+	Assertions []AssertionResult `json:"assertions,omitempty"`
 
 	// Criteria holds the per-criterion verdict for this Run, in the same
 	// order as Eval.Criteria. Empty when Eval.Judge is nil OR when Err != nil.
-	Criteria []CriterionResult
+	Criteria []CriterionResult `json:"criteria,omitempty"`
 
 	// Pass is true only when Err is nil AND every assertion AND every
 	// criterion verdict for this Run is Pass=true. Note this is per-run;
 	// EvalResult.Pass is the per-eval aggregate.
-	Pass bool
+	Pass bool `json:"pass"`
 
 	// Err records a Run-time failure: a non-nil error from Eval.Run, a
-	// recovered panic, or a context timeout.
-	Err error
+	// recovered panic, or a context timeout. JSON-marshalled as a string
+	// via MarshalJSON since error has no useful default representation.
+	Err error `json:"-"`
 
-	// Duration is how long Eval.Run took.
-	Duration time.Duration
+	// Duration is how long Eval.Run took. JSON-marshalled as milliseconds
+	// for downstream-tool readability.
+	Duration time.Duration `json:"-"`
+}
+
+// MarshalJSON renders RunResult with err as a string (or omitted when nil)
+// and duration in milliseconds — both more usable shapes for JSON than
+// Go's defaults (error → empty struct, duration → nanoseconds).
+func (r RunResult) MarshalJSON() ([]byte, error) {
+	var errStr string
+	if r.Err != nil {
+		errStr = r.Err.Error()
+	}
+	return json.Marshal(struct {
+		Output     string            `json:"output,omitempty"`
+		Assertions []AssertionResult `json:"assertions,omitempty"`
+		Criteria   []CriterionResult `json:"criteria,omitempty"`
+		Pass       bool              `json:"pass"`
+		Err        string            `json:"err,omitempty"`
+		DurationMS int64             `json:"durationMs"`
+	}{
+		Output:     r.Output,
+		Assertions: r.Assertions,
+		Criteria:   r.Criteria,
+		Pass:       r.Pass,
+		Err:        errStr,
+		DurationMS: r.Duration.Milliseconds(),
+	})
 }
 
 // Run executes eval and returns the aggregated result. It invokes eval.Run

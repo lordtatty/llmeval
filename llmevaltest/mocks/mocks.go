@@ -121,3 +121,51 @@ func (_c *MockTestingT_Helper_Call) RunAndReturn(run func()) *MockTestingT_Helpe
 	_c.Run(run)
 	return _c
 }
+
+// Log provides a mock function for the type MockTestingT
+func (_mock *MockTestingT) Log(args ...any) {
+	if len(args) > 0 {
+		_mock.Called(args)
+	} else {
+		_mock.Called()
+	}
+
+	return
+}
+
+// MockTestingT_Log_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Log'
+type MockTestingT_Log_Call struct {
+	*mock.Call
+}
+
+// Log is a helper method to define mock.On call
+//   - args ...any
+func (_e *MockTestingT_Expecter) Log(args ...interface{}) *MockTestingT_Log_Call {
+	return &MockTestingT_Log_Call{Call: _e.mock.On("Log",
+		append([]interface{}{}, args...)...)}
+}
+
+func (_c *MockTestingT_Log_Call) Run(run func(args ...any)) *MockTestingT_Log_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 []any
+		var variadicArgs []any
+		if len(args) > 0 {
+			variadicArgs = args[0].([]any)
+		}
+		arg0 = variadicArgs
+		run(
+			arg0...,
+		)
+	})
+	return _c
+}
+
+func (_c *MockTestingT_Log_Call) Return() *MockTestingT_Log_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockTestingT_Log_Call) RunAndReturn(run func(args ...any)) *MockTestingT_Log_Call {
+	_c.Run(run)
+	return _c
+}
