@@ -15,6 +15,8 @@ github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwA
 github.com/josharian/intern v1.0.0/go.mod h1:5DoeVV0s6jJacbCEi61lwdGj/aVlrQvzHFFd8Hwg//Y=
 github.com/lordtatty/llmeval v0.0.0-20260531143638-751ec81d14fe h1:9jy3iCcxo5y9EBc3tqSGWVfgwziJNdVAPg44I2LsmU0=
 github.com/lordtatty/llmeval v0.0.0-20260531143638-751ec81d14fe/go.mod h1:lsheqIDwgoMJLPYwKh8gpGYjrPH/C2WTKkhk7AcIm60=
+github.com/lordtatty/llmeval v0.0.0-20260531205829-d51f9a9b9279 h1:0VRUION9fgNPjn4nifAsniA+Ez7dU3hnZmIatQc+u9w=
+github.com/lordtatty/llmeval v0.0.0-20260531205829-d51f9a9b9279/go.mod h1:lsheqIDwgoMJLPYwKh8gpGYjrPH/C2WTKkhk7AcIm60=
 github.com/mailru/easyjson v0.7.7 h1:UGYAvKxe3sBsEDzO8ZeWOSlIQfWFlxbzLZe7hwFURr0=
 github.com/mailru/easyjson v0.7.7/go.mod h1:xzfreul335JAWq5oZzymOObrkdz5UnU4kGfJJLY9Nlc=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
