@@ -10,6 +10,12 @@ notes/
 *.out
 coverage.html
 
+# Go workspace — per-developer convenience for editing multiple sub-modules
+# together. Each module is independently versioned with its own go.sum, so
+# the workspace is not part of the build-of-record.
+go.work
+go.work.sum
+
 # Editor / OS noise
 .DS_Store
 .idea/

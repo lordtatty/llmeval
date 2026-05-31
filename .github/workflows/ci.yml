@@ -1,12 +1,12 @@
 # CI — runs on every push to main and on every pull request.
 #
-# Two jobs run in parallel:
-#   1. test + coverage — go test (with race detector and coverage in one
-#      pass), the build-tagged example evals, and a guard that fails if
-#      library coverage drops below 100% statements
-#   2. golangci-lint — using the .golangci.yml config in the repo root
+# Three modules live in this repo (workspace via go.work):
+#   - .             — core llmeval + llmevaltest
+#   - ./anthropic   — pre-wired judge for Anthropic Claude
+#   - ./openai      — pre-wired judge for OpenAI GPT
 #
-# Linux only; this is a pure Go library with no OS-specific paths.
+# Each is tested independently. The test job also runs the build-tagged
+# example evals from the root module.
 
 name: CI
 
@@ -15,14 +15,9 @@ on:
     branches: [main]
   pull_request:
 
-# Least-privilege: this workflow only reads code, never writes to the repo,
-# comments, packages, etc. If any action got compromised, the blast radius
-# is limited to read-only operations.
 permissions:
   contents: read
 
-# Cancel superseded runs on the same ref: if three commits land in quick
-# succession we only care about the latest. Saves CI minutes and queue time.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -40,28 +35,40 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: go test (race detector + coverage in one pass)
-        run: go test -race -coverprofile=coverage.out ./...
+      - name: Test each module (race detector + coverage)
+        run: |
+          set -euo pipefail
+          for dir in . anthropic openai; do
+            echo "==> go test in $dir"
+            (cd "$dir" && go test -race -coverprofile=coverage.out ./...)
+          done
 
-      - name: go test examples (build tag llmeval)
+      - name: Test build-tagged example evals
         run: go test -tags=llmeval ./examples/...
 
-      - name: Library coverage must be 100%
+      - name: Coverage must be 100% in every module
         run: |
-          # Inspect every library file's per-function coverage. Anything
-          # under 100% in the library (excluding examples/ and generated
-          # mocks/) is a fail.
-          gaps=$(go tool cover -func=coverage.out \
-            | grep -E '^github\.com/lordtatty/llmeval' \
-            | grep -v '/examples/' \
-            | grep -v '/mocks/' \
-            | grep -v '100\.0%') || true
-          if [ -n "$gaps" ]; then
-            echo "::error::Library coverage dropped below 100%"
-            echo "$gaps"
+          set -euo pipefail
+          fail=0
+          for dir in . anthropic openai; do
+            # Inspect every file's per-function coverage in this module.
+            # Anything under 100% (excluding examples/ and generated mocks/)
+            # is a fail.
+            gaps=$(cd "$dir" && go tool cover -func=coverage.out \
+              | grep -E '^github\.com/lordtatty/llmeval' \
+              | grep -v '/examples/' \
+              | grep -v '/mocks/' \
+              | grep -v '100\.0%') || true
+            if [ -n "$gaps" ]; then
+              echo "::error::$dir coverage dropped below 100%"
+              echo "$gaps"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
             exit 1
           fi
-          echo "Library packages at 100% coverage"
+          echo "All modules at 100% coverage"
 
   lint:
     name: golangci-lint
@@ -78,3 +85,13 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.12.2
+
+      - name: Lint sub-modules
+        run: |
+          set -uo pipefail
+          fail=0
+          for dir in anthropic openai; do
+            echo "==> lint $dir"
+            (cd "$dir" && $(go env GOPATH)/bin/golangci-lint run ./...) || fail=1
+          done
+          exit $fail
