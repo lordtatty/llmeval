@@ -102,6 +102,50 @@ func TestMaxCostDoesNotPanicWhenAPricerInTheVariadicIsNil(t *testing.T) {
 	assert.True(t, pass, "second (non-nil) pricer should match; nil should be skipped")
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MaxTokens
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestMaxTokensPassesWhenSumIsBelowLimit(t *testing.T) {
+	pc := llmeval.MaxTokens(1000)
+	pass, _ := pc.Check(llmeval.EvalResult{
+		Usage: []llmeval.Usage{{InputTokens: 200, OutputTokens: 100}},
+	})
+	assert.True(t, pass)
+}
+
+func TestMaxTokensPassesWhenSumEqualsLimitExactly(t *testing.T) {
+	pc := llmeval.MaxTokens(300)
+	pass, _ := pc.Check(llmeval.EvalResult{
+		Usage: []llmeval.Usage{{InputTokens: 200, OutputTokens: 100}},
+	})
+	assert.True(t, pass)
+}
+
+func TestMaxTokensFailsWhenSumExceedsLimit(t *testing.T) {
+	pc := llmeval.MaxTokens(100)
+	pass, reason := pc.Check(llmeval.EvalResult{
+		Usage: []llmeval.Usage{
+			{InputTokens: 80, OutputTokens: 30},
+			{InputTokens: 50, OutputTokens: 10},
+		},
+	})
+	assert.False(t, pass)
+	assert.Contains(t, reason, "170") // total used
+	assert.Contains(t, reason, "100") // limit
+}
+
+func TestMaxTokensPassesWhenUsageIsEmpty(t *testing.T) {
+	pc := llmeval.MaxTokens(100)
+	pass, _ := pc.Check(llmeval.EvalResult{})
+	assert.True(t, pass)
+}
+
+func TestMaxTokensNameSurfacesTheConfiguredLimit(t *testing.T) {
+	pc := llmeval.MaxTokens(500)
+	assert.Contains(t, pc.Name, "500")
+}
+
 func TestMaxCostMultiplePricersUseFirstMatchingOne(t *testing.T) {
 	cheap := func(u llmeval.Usage) (float64, bool) {
 		if u.Provider == "p" {

@@ -59,3 +59,27 @@ func MaxCost(limit float64, pricers ...Pricer) PostCheck {
 		},
 	}
 }
+
+// MaxTokens returns a PostCheck that fails when the total token count
+// (input + output, summed across every recorded Usage) exceeds limit.
+// Use when you want a budget that doesn't depend on a price table — handy
+// for caps expressed against rate-limit quotas rather than dollars.
+//
+// "used == limit" passes (limit is the ceiling, not strict-less-than),
+// matching MaxCost's convention. An eval with no recorded Usage uses 0
+// tokens and therefore always passes.
+func MaxTokens(limit int) PostCheck {
+	return PostCheck{
+		Name: fmt.Sprintf("max tokens: %d", limit),
+		Check: func(r EvalResult) (bool, string) {
+			used := 0
+			for _, u := range r.Usage {
+				used += u.InputTokens + u.OutputTokens
+			}
+			if used > limit {
+				return false, fmt.Sprintf("used %d, limit %d", used, limit)
+			}
+			return true, ""
+		},
+	}
+}
