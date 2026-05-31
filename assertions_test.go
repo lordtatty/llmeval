@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/lordtatty/llmeval"
 )
@@ -93,6 +94,76 @@ func TestCheckAdaptsACustomPredicateIntoAnAssertion(t *testing.T) {
 		return false, "wrong length"
 	})
 	assert.True(t, runWith("abc", exactlyThreeChars).Pass)
+}
+
+// ── CheckJSON (typed predicate over JSON-encoded output) ───────────────────
+
+func TestCheckJSONPassesWhenPredicateAcceptsTheDecodedValue(t *testing.T) {
+	type response struct{ Category string }
+	asn := llmeval.CheckJSON("category", func(r response) (bool, string) {
+		if r.Category == "positive" {
+			return true, ""
+		}
+		return false, "got " + r.Category
+	})
+	assert.True(t, runWith(`{"Category":"positive"}`, asn).Pass)
+}
+
+func TestCheckJSONFailsWithReasonWhenPredicateRejects(t *testing.T) {
+	type response struct{ Category string }
+	asn := llmeval.CheckJSON("category", func(r response) (bool, string) {
+		if r.Category == "positive" {
+			return true, ""
+		}
+		return false, "got " + r.Category
+	})
+	result := runWith(`{"Category":"negative"}`, asn)
+	require.False(t, result.Pass)
+	require.Len(t, result.Runs, 1)
+	assert.Contains(t, result.Runs[0].Assertions[0].Reason, "negative")
+}
+
+func TestCheckJSONFailsWithUnmarshalReasonWhenOutputIsNotValidJSON(t *testing.T) {
+	type response struct{ Category string }
+	// Predicate must not be called on invalid JSON — we use a flag rather
+	// than t.Fatal so the test still exposes the assertion's failure
+	// reason rather than dying inside the closure.
+	called := false
+	asn := llmeval.CheckJSON("category", func(response) (bool, string) {
+		called = true
+		return false, ""
+	})
+	result := runWith("not json at all", asn)
+	require.False(t, result.Pass)
+	assert.False(t, called, "predicate should be skipped on invalid JSON")
+	assert.Contains(t, result.Runs[0].Assertions[0].Reason, "not valid JSON")
+}
+
+func TestCheckJSONFailsWithReasonWhenOutputIsLiteralJSONNull(t *testing.T) {
+	// `null` decodes successfully to zero-value T — left unchecked, the
+	// predicate would then report a per-field miss for the user instead of
+	// the real "model returned JSON null" failure. Catch it explicitly.
+	type response struct{ Category string }
+	called := false
+	asn := llmeval.CheckJSON("category", func(response) (bool, string) {
+		called = true
+		return true, ""
+	})
+	result := runWith("null", asn)
+	require.False(t, result.Pass)
+	assert.False(t, called, "predicate should not see JSON null")
+	assert.Contains(t, result.Runs[0].Assertions[0].Reason, "null")
+}
+
+func TestCheckJSONHandlesPrimitiveTypes(t *testing.T) {
+	// T can be any json.Unmarshal-compatible type, not just a struct.
+	asn := llmeval.CheckJSON("positive int", func(n int) (bool, string) {
+		if n > 0 {
+			return true, ""
+		}
+		return false, "non-positive"
+	})
+	assert.True(t, runWith("42", asn).Pass)
 }
 
 // ── AtLeast (tolerance wrapper) ─────────────────────────────────────────────

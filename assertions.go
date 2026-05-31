@@ -2,6 +2,7 @@ package llmeval
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"slices"
@@ -68,6 +69,31 @@ func Matches(re *regexp.Regexp) Assertion {
 // ObjectsAreEqual, go-cmp, or any other library that returns a bool.
 func Check(name string, fn func(output string) (pass bool, reason string)) Assertion {
 	return predicate(name, fn)
+}
+
+// CheckJSON decodes the SUT output as JSON into a value of type T and runs
+// fn against the decoded value. Use when your SUT returns structured
+// output and you want to assert on typed fields without unmarshalling
+// inside every predicate.
+//
+// Fails with reason "not valid JSON: ..." when the output isn't decodable
+// into T, and "output was JSON null" when the output is the literal token
+// `null` (which decodes silently to a zero-value T — a real failure mode
+// for JSON-mode models that's worse than malformed JSON because the
+// predicate would otherwise see uninitialised fields and report
+// per-field misses instead of the actual problem). Otherwise delegates
+// pass/fail to fn.
+func CheckJSON[T any](name string, fn func(T) (pass bool, reason string)) Assertion {
+	return predicate(name, func(output string) (bool, string) {
+		if strings.TrimSpace(output) == "null" {
+			return false, "output was JSON null"
+		}
+		var v T
+		if err := json.Unmarshal([]byte(output), &v); err != nil {
+			return false, fmt.Sprintf("not valid JSON: %v", err)
+		}
+		return fn(v)
+	})
 }
 
 // AtLeast wraps a to lower its required pass rate. AtLeast(0.8, asn) means

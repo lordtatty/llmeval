@@ -277,6 +277,60 @@ expected drift.
 
 ## Common questions
 
+**My SUT returns structured output, not a string** — `Eval.Run` returns
+`(string, error)`, so serialize once and assert on typed fields with
+`llmeval.CheckJSON`:
+
+```go
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "testing"
+
+    "github.com/lordtatty/llmeval"
+    "github.com/lordtatty/llmeval/llmevaltest"
+)
+
+type response struct {
+    Category   string
+    Confidence float64
+}
+
+func TestMySUT(t *testing.T) {
+    llmevaltest.Run(t, llmeval.Eval{
+        Run: func(ctx context.Context) (string, error) {
+            r, err := mySUT(ctx)
+            if err != nil {
+                return "", err
+            }
+            b, err := json.Marshal(r)
+            if err != nil {
+                return "", err
+            }
+            return string(b), nil
+        },
+        Assertions: []llmeval.Assertion{
+            llmeval.CheckJSON("category is positive", func(r response) (bool, string) {
+                if r.Category == "positive" {
+                    return true, ""
+                }
+                return false, "got " + r.Category
+            }),
+            llmeval.CheckJSON("confidence ≥ 0.8", func(r response) (bool, string) {
+                if r.Confidence >= 0.8 {
+                    return true, ""
+                }
+                return false, fmt.Sprintf("confidence %.2f", r.Confidence)
+            }),
+        },
+    })
+}
+```
+
+The judge still sees the JSON string and can include "is well-formed JSON"
+as a criterion if you want.
+
 **`MaxCost` fails with "no matching pricer"** — you didn't pass a `Pricer`
 for the provider whose usage was recorded. `MaxCost` is fail-closed:
 unpriced usage means the budget can't be certified, so it fails rather
@@ -355,6 +409,7 @@ go test -tags=llmeval ./examples/... -v
 - `llmeval.Eval` — one declarative eval per `Test*` function
 - `llmeval.Equal`, `OneOf`, `Contains`, `NotContains`, `Matches` — built-in assertion helpers
 - `llmeval.Check(name, fn)` — adapter for any custom predicate (testify, go-cmp, etc.)
+- `llmeval.CheckJSON[T](name, fn)` — like `Check` but the predicate sees the SUT output already decoded into `T`
 - `llmeval.AtLeast(rate, asn)` — tolerance wrapper for multi-run evals
 - `llmeval.Judge` / `Criterion` / `PromptedJudge` — batched LLM-as-judge: one LLM call per Run, N criteria, N verdicts back
 - Pluggable response format: default `PrefixVerdictParser` (PASS/FAIL prefix) or `JSONVerdictParser` + `JSONPromptTemplate` (for structured-output-capable LLMs)
