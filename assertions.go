@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 )
 
 // Equal returns an Assertion that passes when the output exactly equals want.
@@ -72,9 +73,10 @@ func Check(name string, fn func(output string) (pass bool, reason string)) Asser
 }
 
 // CheckJSON decodes the SUT output as JSON into a value of type T and runs
-// fn against the decoded value. Use when your SUT returns structured
-// output and you want to assert on typed fields without unmarshalling
-// inside every predicate.
+// fn against the decoded value. Use for a single typed assertion against a
+// structured output; when you have several assertions against the same
+// struct, prefer SharedDecoder so the decode happens once per output
+// rather than once per assertion.
 //
 // Fails with reason "not valid JSON: ..." when the output isn't decodable
 // into T, and "output was JSON null" when the output is the literal token
@@ -84,16 +86,81 @@ func Check(name string, fn func(output string) (pass bool, reason string)) Asser
 // per-field misses instead of the actual problem). Otherwise delegates
 // pass/fail to fn.
 func CheckJSON[T any](name string, fn func(T) (pass bool, reason string)) Assertion {
+	return (&SharedDecoder[T]{}).Check(name, fn)
+}
+
+// SharedDecoder lets several Assertions over the same Run output share a
+// single JSON decode. Use when you have multiple typed checks against
+// different fields of one structured response: sd.Check returns
+// Assertions that all hit a per-output cache, so each distinct output is
+// decoded once instead of once per assertion.
+//
+//	sd := &llmeval.SharedDecoder[MyStruct]{}
+//	Assertions: []llmeval.Assertion{
+//	    sd.Check("category", func(r MyStruct) (bool, string) { ... }),
+//	    sd.Check("confidence", func(r MyStruct) (bool, string) { ... }),
+//	}
+//
+// Construct with `&` so the embedded mutex stays at a stable address —
+// a value copy (e.g. `sd2 := sd`) would silently fork the cache and
+// trip go vet's lock-copy detector.
+//
+// Safe for concurrent use — under Eval.Concurrency > 1 multiple
+// goroutines may hit the same decoder simultaneously; the internal mutex
+// serialises cache mutations.
+//
+// Decode failure modes match CheckJSON: "not valid JSON: <err>" when
+// Unmarshal fails, "output was JSON null" when the output is the literal
+// token `null`. In both cases the predicate is skipped so it never sees
+// an uninitialised T.
+type SharedDecoder[T any] struct {
+	mu    sync.Mutex
+	cache map[string]decodedJSON[T]
+}
+
+// decodedJSON holds one resolved decode result. reason is empty when the
+// decode succeeded; non-empty values propagate to the assertion's failure
+// Reason and skip the predicate.
+type decodedJSON[T any] struct {
+	value  T
+	reason string
+}
+
+// Check returns an Assertion that retrieves the decoded value from the
+// shared cache (decoding on first miss) and runs fn against it.
+func (sd *SharedDecoder[T]) Check(name string, fn func(T) (pass bool, reason string)) Assertion {
 	return predicate(name, func(output string) (bool, string) {
-		if strings.TrimSpace(output) == "null" {
-			return false, "output was JSON null"
+		d := sd.get(output)
+		if d.reason != "" {
+			return false, d.reason
 		}
-		var v T
-		if err := json.Unmarshal([]byte(output), &v); err != nil {
-			return false, fmt.Sprintf("not valid JSON: %v", err)
-		}
-		return fn(v)
+		return fn(d.value)
 	})
+}
+
+func (sd *SharedDecoder[T]) get(output string) decodedJSON[T] {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+	if sd.cache == nil {
+		sd.cache = make(map[string]decodedJSON[T])
+	}
+	if d, ok := sd.cache[output]; ok {
+		return d
+	}
+	d := decodeJSON[T](output)
+	sd.cache[output] = d
+	return d
+}
+
+func decodeJSON[T any](output string) decodedJSON[T] {
+	var v T
+	if strings.TrimSpace(output) == "null" {
+		return decodedJSON[T]{reason: "output was JSON null"}
+	}
+	if err := json.Unmarshal([]byte(output), &v); err != nil {
+		return decodedJSON[T]{reason: fmt.Sprintf("not valid JSON: %v", err)}
+	}
+	return decodedJSON[T]{value: v}
 }
 
 // AtLeast wraps a to lower its required pass rate. AtLeast(0.8, asn) means

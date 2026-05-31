@@ -166,6 +166,117 @@ func TestCheckJSONHandlesPrimitiveTypes(t *testing.T) {
 	assert.True(t, runWith("42", asn).Pass)
 }
 
+// ── SharedDecoder (typed multi-field assertions over one decode) ───────────
+
+// sharedResponse is the demo struct for SharedDecoder tests — kept tiny so
+// the tests focus on the helper's behaviour, not the JSON.
+type sharedResponse struct {
+	Category   string
+	Confidence float64
+}
+
+func TestSharedDecoderCheckPassesWhenPredicateAcceptsTheDecodedValue(t *testing.T) {
+	sd := llmeval.SharedDecoder[sharedResponse]{}
+	asn := sd.Check("category", func(r sharedResponse) (bool, string) {
+		if r.Category == "positive" {
+			return true, ""
+		}
+		return false, "got " + r.Category
+	})
+	assert.True(t, runWith(`{"Category":"positive","Confidence":0.9}`, asn).Pass)
+}
+
+func TestSharedDecoderCheckFailsWithReasonWhenPredicateRejects(t *testing.T) {
+	sd := llmeval.SharedDecoder[sharedResponse]{}
+	asn := sd.Check("category", func(r sharedResponse) (bool, string) {
+		if r.Category == "positive" {
+			return true, ""
+		}
+		return false, "got " + r.Category
+	})
+	result := runWith(`{"Category":"negative","Confidence":0.9}`, asn)
+	require.False(t, result.Pass)
+	require.Len(t, result.Runs, 1)
+	assert.Contains(t, result.Runs[0].Assertions[0].Reason, "negative")
+}
+
+func TestSharedDecoderCheckFailsWhenOutputIsInvalidJSON(t *testing.T) {
+	sd := llmeval.SharedDecoder[sharedResponse]{}
+	called := false
+	asn := sd.Check("category", func(sharedResponse) (bool, string) {
+		called = true
+		return true, ""
+	})
+	result := runWith("not json", asn)
+	require.False(t, result.Pass)
+	assert.False(t, called, "predicate should be skipped on invalid JSON")
+	assert.Contains(t, result.Runs[0].Assertions[0].Reason, "not valid JSON")
+}
+
+func TestSharedDecoderCheckFailsWhenOutputIsLiteralJSONNull(t *testing.T) {
+	sd := llmeval.SharedDecoder[sharedResponse]{}
+	called := false
+	asn := sd.Check("category", func(sharedResponse) (bool, string) {
+		called = true
+		return true, ""
+	})
+	result := runWith("null", asn)
+	require.False(t, result.Pass)
+	assert.False(t, called, "predicate should be skipped on JSON null")
+	assert.Contains(t, result.Runs[0].Assertions[0].Reason, "null")
+}
+
+func TestSharedDecoderRunsMultipleAssertionsAgainstOneDecode(t *testing.T) {
+	// Two assertions over the same output. Both should see the same
+	// decoded value; the cache makes the underlying decode happen once
+	// per distinct output, not once per assertion. Verified implicitly
+	// here — explicit cache-hit metering would require exposing internals.
+	sd := llmeval.SharedDecoder[sharedResponse]{}
+	result := llmeval.Run(context.Background(), llmeval.Eval{
+		Run: func(context.Context) (string, error) {
+			return `{"Category":"positive","Confidence":0.9}`, nil
+		},
+		Assertions: []llmeval.Assertion{
+			sd.Check("category", func(r sharedResponse) (bool, string) {
+				if r.Category == "positive" {
+					return true, ""
+				}
+				return false, "wrong category"
+			}),
+			sd.Check("confidence", func(r sharedResponse) (bool, string) {
+				if r.Confidence >= 0.8 {
+					return true, ""
+				}
+				return false, "low confidence"
+			}),
+		},
+	})
+	assert.True(t, result.Pass, "result=%+v", result)
+}
+
+func TestSharedDecoderIsSafeForConcurrentAssertionsAcrossRepeats(t *testing.T) {
+	// Eval.Concurrency > 1 means several goroutines hit the same
+	// SharedDecoder simultaneously. The internal mutex must serialise
+	// cache mutations; the -race detector validates correctness.
+	sd := llmeval.SharedDecoder[sharedResponse]{}
+	result := llmeval.Run(context.Background(), llmeval.Eval{
+		Run: func(context.Context) (string, error) {
+			return `{"Category":"positive","Confidence":0.9}`, nil
+		},
+		Repeat:      20,
+		Concurrency: 5,
+		Assertions: []llmeval.Assertion{
+			sd.Check("category", func(r sharedResponse) (bool, string) {
+				if r.Category == "positive" {
+					return true, ""
+				}
+				return false, "wrong"
+			}),
+		},
+	})
+	assert.True(t, result.Pass)
+}
+
 // ── AtLeast (tolerance wrapper) ─────────────────────────────────────────────
 //
 // AtLeast needs multiple runs to be meaningful — these tests use a

@@ -278,8 +278,11 @@ expected drift.
 ## Common questions
 
 **My SUT returns structured output, not a string** — `Eval.Run` returns
-`(string, error)`, so serialize once and assert on typed fields with
-`llmeval.CheckJSON`:
+`(string, error)`, so serialize once and use `llmeval.SharedDecoder[T]`
+to stack typed assertions over the same decoded value. It decodes once
+per distinct output and shares the typed result across all `Check`
+calls — one assertion per field, no JSON-unmarshal inside every
+predicate:
 
 ```go
 import (
@@ -298,6 +301,8 @@ type response struct {
 }
 
 func TestMySUT(t *testing.T) {
+    sd := &llmeval.SharedDecoder[response]{}
+
     llmevaltest.Run(t, llmeval.Eval{
         Run: func(ctx context.Context) (string, error) {
             r, err := mySUT(ctx)
@@ -311,13 +316,13 @@ func TestMySUT(t *testing.T) {
             return string(b), nil
         },
         Assertions: []llmeval.Assertion{
-            llmeval.CheckJSON("category is positive", func(r response) (bool, string) {
+            sd.Check("category is positive", func(r response) (bool, string) {
                 if r.Category == "positive" {
                     return true, ""
                 }
                 return false, "got " + r.Category
             }),
-            llmeval.CheckJSON("confidence ≥ 0.8", func(r response) (bool, string) {
+            sd.Check("confidence ≥ 0.8", func(r response) (bool, string) {
                 if r.Confidence >= 0.8 {
                     return true, ""
                 }
@@ -328,8 +333,10 @@ func TestMySUT(t *testing.T) {
 }
 ```
 
-The judge still sees the JSON string and can include "is well-formed JSON"
-as a criterion if you want.
+For a single typed assertion, `llmeval.CheckJSON("name", fn)` is the
+one-liner equivalent (it's `(&SharedDecoder[T]{}).Check` under the
+hood). The judge still sees the JSON string and can include "is
+well-formed JSON" as a criterion if you want.
 
 **`MaxCost` fails with "no matching pricer"** — you didn't pass a `Pricer`
 for the provider whose usage was recorded. `MaxCost` is fail-closed:
@@ -505,6 +512,7 @@ Each test calls `runEval` instead of `llmevaltest.Run` directly. The
 - `llmeval.Equal`, `OneOf`, `Contains`, `NotContains`, `Matches` — built-in assertion helpers
 - `llmeval.Check(name, fn)` — adapter for any custom predicate (testify, go-cmp, etc.)
 - `llmeval.CheckJSON[T](name, fn)` — like `Check` but the predicate sees the SUT output already decoded into `T`
+- `llmeval.SharedDecoder[T]` — multi-field structured-output helper: `sd.Check(...)` returns Assertions that share a single decode per distinct output, so N field-level checks decode N times less
 - `llmeval.AtLeast(rate, asn)` — tolerance wrapper for multi-run evals
 - `llmeval.Judge` / `Criterion` / `PromptedJudge` — batched LLM-as-judge: one LLM call per Run, N criteria, N verdicts back
 - Pluggable response format: default `PrefixVerdictParser` (PASS/FAIL prefix) or `JSONVerdictParser` + `JSONPromptTemplate` (for structured-output-capable LLMs)
