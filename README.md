@@ -404,6 +404,101 @@ of the SDK.
 go test -tags=llmeval ./examples/... -v
 ```
 
+## Running in CI
+
+Eval tests cost money and time, so the usual CI shape is *run on
+schedule, not every PR* — paid evals nightly or weekly, the cheap
+stub-based example evals on every push.
+
+`.github/workflows/evals.yml`:
+
+```yaml
+name: LLM evals
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # 06:00 UTC every Monday
+  workflow_dispatch:       # also runnable manually
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run eval suite
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
+        run: go test -tags=llmeval -v ./...
+```
+
+Add the API keys at *Settings → Secrets and variables → Actions*. The
+`-v` flag surfaces the per-test usage and cost logs each eval emits via
+`llmevaltest.Run`'s auto-report.
+
+For per-PR sanity that runs the stub example evals without API keys
+(see `examples/classifier/` for the shape):
+
+```yaml
+- name: Run example evals (stub LLM)
+  run: go test -tags=llmeval ./examples/...
+```
+
+## Tracking suite-level cost
+
+`EvalResult.Usage` holds one eval's aggregate. To roll up across an
+entire test file, collect into a package-level slice and print the
+total in `TestMain`:
+
+```go
+package myevals_test
+
+import (
+    "fmt"
+    "os"
+    "testing"
+
+    "github.com/lordtatty/llmeval"
+    "github.com/lordtatty/llmeval/anthropic"
+    "github.com/lordtatty/llmeval/llmevaltest"
+)
+
+var suiteUsage []llmeval.Usage
+
+// runEval wraps llmevaltest.Run so every eval feeds the suite collector.
+func runEval(t *testing.T, eval llmeval.Eval) {
+    t.Helper()
+    suiteUsage = append(suiteUsage, llmevaltest.Run(t, eval).Usage...)
+}
+
+func TestMain(m *testing.M) {
+    code := m.Run()
+    if len(suiteUsage) > 0 {
+        fmt.Println("\nsuite usage:")
+        for _, u := range suiteUsage {
+            fmt.Printf("  %s/%s  %d in / %d out\n",
+                u.Provider, u.Model, u.InputTokens, u.OutputTokens)
+        }
+        total := llmeval.TotalCost(suiteUsage, anthropic.Pricer())
+        fmt.Printf("  estimated cost: $%.4f\n", total)
+    }
+    os.Exit(code)
+}
+
+func TestThing(t *testing.T) {
+    runEval(t, llmeval.Eval{ /* ... */ })
+}
+```
+
+Each test calls `runEval` instead of `llmevaltest.Run` directly. The
+`TestMain` prints the suite roll-up once after every test finishes.
+
 ## What works today
 
 - `llmeval.Eval` — one declarative eval per `Test*` function
