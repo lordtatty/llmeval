@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -85,11 +86,11 @@ func clientPointingAt(t *testing.T, f *fakeAPI) *anthropicsdk.Client {
 // Wiring contract — what the LLMFunc actually sends to Anthropic.
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestNewJudgeSendsThePromptAsAUserMessage(t *testing.T) {
+func TestNewDefaultJudgeSendsThePromptAsAUserMessage(t *testing.T) {
 	fake := newFakeAPI()
 	defer fake.server.Close()
 
-	judge := anthropic.NewJudge(clientPointingAt(t, fake))
+	judge := anthropic.NewDefaultJudge(clientPointingAt(t, fake))
 
 	_, err := judge.Evaluate(context.Background(), "the SUT output", []llmeval.Criterion{
 		{Description: "is concise"},
@@ -107,11 +108,11 @@ func TestNewJudgeSendsThePromptAsAUserMessage(t *testing.T) {
 	assert.Contains(t, string(content), "the SUT output")
 }
 
-func TestNewJudgeUsesDefaultModelAndMaxTokens(t *testing.T) {
+func TestNewDefaultJudgeUsesDefaultModelAndMaxTokens(t *testing.T) {
 	fake := newFakeAPI()
 	defer fake.server.Close()
 
-	judge := anthropic.NewJudge(clientPointingAt(t, fake))
+	judge := anthropic.NewDefaultJudge(clientPointingAt(t, fake))
 	_, err := judge.Evaluate(context.Background(), "x", []llmeval.Criterion{{Description: "a"}})
 	require.NoError(t, err)
 
@@ -128,7 +129,7 @@ func TestWithModelOverridesTheDefaultModel(t *testing.T) {
 	fake := newFakeAPI()
 	defer fake.server.Close()
 
-	judge := anthropic.NewJudge(
+	judge := anthropic.NewDefaultJudge(
 		clientPointingAt(t, fake),
 		anthropic.WithModel(anthropicsdk.ModelClaudeOpus4_5),
 	)
@@ -142,7 +143,7 @@ func TestWithMaxTokensOverridesTheDefault(t *testing.T) {
 	fake := newFakeAPI()
 	defer fake.server.Close()
 
-	judge := anthropic.NewJudge(
+	judge := anthropic.NewDefaultJudge(
 		clientPointingAt(t, fake),
 		anthropic.WithMaxTokens(8192),
 	)
@@ -165,7 +166,7 @@ func TestWithTimeoutOverridesTheDefault(t *testing.T) {
 		option.WithBaseURL(slow.URL),
 		option.WithAPIKey("test-key"),
 	)
-	judge := anthropic.NewJudge(&c, anthropic.WithTimeout(5*time.Millisecond))
+	judge := anthropic.NewDefaultJudge(&c, anthropic.WithTimeout(5*time.Millisecond))
 
 	_, err := judge.Evaluate(context.Background(), "x", []llmeval.Criterion{{Description: "a"}})
 	require.Error(t, err)
@@ -177,18 +178,18 @@ func TestWithTimeoutOverridesTheDefault(t *testing.T) {
 // Error paths.
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestNewJudgePropagatesAPIErrors(t *testing.T) {
+func TestNewDefaultJudgePropagatesAPIErrors(t *testing.T) {
 	fake := newFakeAPI()
 	fake.status = http.StatusInternalServerError
 	defer fake.server.Close()
 
-	judge := anthropic.NewJudge(clientPointingAt(t, fake))
+	judge := anthropic.NewDefaultJudge(clientPointingAt(t, fake))
 
 	_, err := judge.Evaluate(context.Background(), "x", []llmeval.Criterion{{Description: "a"}})
 	require.Error(t, err)
 }
 
-func TestNewJudgeErrorsWhenAPIReturnsEmptyContent(t *testing.T) {
+func TestNewDefaultJudgeErrorsWhenAPIReturnsEmptyContent(t *testing.T) {
 	// A successful but content-less response should error rather than
 	// returning an empty verdict to the parser, which would silently fail
 	// with an unhelpful count-mismatch.
@@ -207,7 +208,7 @@ func TestNewJudgeErrorsWhenAPIReturnsEmptyContent(t *testing.T) {
 	defer server.Close()
 
 	c := anthropicsdk.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test-key"))
-	judge := anthropic.NewJudge(&c)
+	judge := anthropic.NewDefaultJudge(&c)
 
 	_, err := judge.Evaluate(context.Background(), "x", []llmeval.Criterion{{Description: "a"}})
 	require.Error(t, err)
@@ -225,7 +226,7 @@ func TestJudgeReturnsParsedVerdictsToTheEvalRunner(t *testing.T) {
 	fake.reply = "1. PASS: looks fine\n2. PASS: also fine\n"
 	defer fake.server.Close()
 
-	judge := anthropic.NewJudge(clientPointingAt(t, fake))
+	judge := anthropic.NewDefaultJudge(clientPointingAt(t, fake))
 
 	result := llmeval.Run(context.Background(), llmeval.Eval{
 		Run:   func(context.Context) (string, error) { return "the output", nil },
@@ -240,4 +241,52 @@ func TestJudgeReturnsParsedVerdictsToTheEvalRunner(t *testing.T) {
 	require.Len(t, result.Criteria, 2)
 	assert.Equal(t, 1, result.Criteria[0].Passed)
 	assert.Equal(t, 1, result.Criteria[1].Passed)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JSON-format judge (NewJSONJudge + WithJSONFormat).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// sameParser compares two VerdictParser values by their function pointer
+// — Go can't compare function values directly with ==.
+func sameParser(a, b llmeval.VerdictParser) bool {
+	return reflect.ValueOf(a).Pointer() == reflect.ValueOf(b).Pointer()
+}
+
+func TestWithJSONFormatSetsJSONPromptTemplateAndParserOnTheJudge(t *testing.T) {
+	fake := newFakeAPI()
+	defer fake.server.Close()
+
+	judge := anthropic.NewDefaultJudge(clientPointingAt(t, fake), anthropic.WithJSONFormat())
+
+	assert.Equal(t, llmeval.JSONPromptTemplate, judge.PromptTemplate)
+	assert.True(t, sameParser(llmeval.JSONVerdictParser, judge.Parser),
+		"Parser should be llmeval.JSONVerdictParser")
+}
+
+func TestNewJSONJudgeReturnsAJudgeConfiguredForJSONFormat(t *testing.T) {
+	fake := newFakeAPI()
+	defer fake.server.Close()
+
+	judge := anthropic.NewJSONJudge(clientPointingAt(t, fake))
+
+	assert.Equal(t, llmeval.JSONPromptTemplate, judge.PromptTemplate)
+	assert.True(t, sameParser(llmeval.JSONVerdictParser, judge.Parser))
+}
+
+func TestNewJSONJudgeAcceptsAdditionalOptionsAlongsideTheJSONFormat(t *testing.T) {
+	fake := newFakeAPI()
+	fake.reply = `{"verdicts":[{"pass":true,"reason":"ok"}]}`
+	defer fake.server.Close()
+
+	judge := anthropic.NewJSONJudge(
+		clientPointingAt(t, fake),
+		anthropic.WithModel(anthropicsdk.ModelClaudeOpus4_5),
+	)
+	_, err := judge.Evaluate(context.Background(), "x", []llmeval.Criterion{{Description: "a"}})
+	require.NoError(t, err)
+
+	// Both the model override AND the JSON format took effect.
+	assert.Equal(t, string(anthropicsdk.ModelClaudeOpus4_5), fake.lastRequest(t)["model"])
+	assert.Equal(t, llmeval.JSONPromptTemplate, judge.PromptTemplate)
 }

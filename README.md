@@ -75,7 +75,7 @@ import (
 )
 
 client := anthropicsdk.NewClient(option.WithAPIKey(os.Getenv("ANTHROPIC_API_KEY")))
-judge := anthropic.NewJudge(&client)
+judge := anthropic.NewDefaultJudge(&client)
 ```
 
 Defaults to `claude-haiku-4-5`, 1024 max tokens, 30s per-call timeout —
@@ -101,7 +101,7 @@ import (
 )
 
 client := openaisdk.NewClient(option.WithAPIKey(os.Getenv("OPENAI_API_KEY")))
-judge := openai.NewJudge(&client)
+judge := openai.NewDefaultJudge(&client)
 ```
 
 Defaults to `gpt-4.1-mini`, 1024 max completion tokens, 30s per-call
@@ -216,7 +216,7 @@ go test -tags=llmeval ./examples/... -v
 - `llmeval.AtLeast(rate, asn)` — tolerance wrapper for multi-run evals
 - `llmeval.Judge` / `Criterion` / `PromptedJudge` — batched LLM-as-judge: one LLM call per Run, N criteria, N verdicts back
 - Pluggable response format: default `PrefixVerdictParser` (PASS/FAIL prefix) or `JSONVerdictParser` + `JSONPromptTemplate` (for structured-output-capable LLMs)
-- `llmeval/anthropic.NewJudge` / `llmeval/openai.NewJudge` — opt-in pre-wired judges in sub-modules so the core stays SDK-free
+- `llmeval/anthropic.NewDefaultJudge` / `llmeval/openai.NewDefaultJudge` — opt-in pre-wired judges in sub-modules so the core stays SDK-free; `NewJSONJudge` ships the same shape pre-configured for JSON-mode replies
 - `llmeval/judgetest` — curated `Cases` + `AssertCase(t, judge, c)` helper for live prompt-quality tests against any `llmeval.Judge` implementation
 - `llmeval.Run` — single-eval runner (no `testing` dependency)
 - `llmevaltest.Run` / `llmevaltest.RequireSuccess` — `testing.T` integration in a subpackage

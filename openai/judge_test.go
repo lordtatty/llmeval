@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -88,11 +89,11 @@ func clientPointingAt(t *testing.T, f *fakeAPI) *openaisdk.Client {
 // Wiring contract — what the LLMFunc actually sends to OpenAI.
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestNewJudgeSendsThePromptAsAUserMessage(t *testing.T) {
+func TestNewDefaultJudgeSendsThePromptAsAUserMessage(t *testing.T) {
 	fake := newFakeAPI()
 	defer fake.server.Close()
 
-	judge := openai.NewJudge(clientPointingAt(t, fake))
+	judge := openai.NewDefaultJudge(clientPointingAt(t, fake))
 
 	_, err := judge.Evaluate(context.Background(), "the SUT output", []llmeval.Criterion{
 		{Description: "is concise"},
@@ -107,11 +108,11 @@ func TestNewJudgeSendsThePromptAsAUserMessage(t *testing.T) {
 	assert.Contains(t, msg["content"].(string), "the SUT output")
 }
 
-func TestNewJudgeUsesDefaultModelAndMaxTokens(t *testing.T) {
+func TestNewDefaultJudgeUsesDefaultModelAndMaxTokens(t *testing.T) {
 	fake := newFakeAPI()
 	defer fake.server.Close()
 
-	judge := openai.NewJudge(clientPointingAt(t, fake))
+	judge := openai.NewDefaultJudge(clientPointingAt(t, fake))
 	_, err := judge.Evaluate(context.Background(), "x", []llmeval.Criterion{{Description: "a"}})
 	require.NoError(t, err)
 
@@ -128,7 +129,7 @@ func TestWithModelOverridesTheDefaultModel(t *testing.T) {
 	fake := newFakeAPI()
 	defer fake.server.Close()
 
-	judge := openai.NewJudge(
+	judge := openai.NewDefaultJudge(
 		clientPointingAt(t, fake),
 		openai.WithModel(shared.ChatModelO4Mini),
 	)
@@ -142,7 +143,7 @@ func TestWithMaxTokensOverridesTheDefault(t *testing.T) {
 	fake := newFakeAPI()
 	defer fake.server.Close()
 
-	judge := openai.NewJudge(
+	judge := openai.NewDefaultJudge(
 		clientPointingAt(t, fake),
 		openai.WithMaxTokens(8192),
 	)
@@ -163,7 +164,7 @@ func TestWithTimeoutOverridesTheDefault(t *testing.T) {
 		option.WithBaseURL(slow.URL),
 		option.WithAPIKey("test-key"),
 	)
-	judge := openai.NewJudge(&c, openai.WithTimeout(5*time.Millisecond))
+	judge := openai.NewDefaultJudge(&c, openai.WithTimeout(5*time.Millisecond))
 
 	_, err := judge.Evaluate(context.Background(), "x", []llmeval.Criterion{{Description: "a"}})
 	require.Error(t, err)
@@ -173,18 +174,18 @@ func TestWithTimeoutOverridesTheDefault(t *testing.T) {
 // Error paths.
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestNewJudgePropagatesAPIErrors(t *testing.T) {
+func TestNewDefaultJudgePropagatesAPIErrors(t *testing.T) {
 	fake := newFakeAPI()
 	fake.status = http.StatusInternalServerError
 	defer fake.server.Close()
 
-	judge := openai.NewJudge(clientPointingAt(t, fake))
+	judge := openai.NewDefaultJudge(clientPointingAt(t, fake))
 
 	_, err := judge.Evaluate(context.Background(), "x", []llmeval.Criterion{{Description: "a"}})
 	require.Error(t, err)
 }
 
-func TestNewJudgeErrorsWhenAPIReturnsEmptyChoices(t *testing.T) {
+func TestNewDefaultJudgeErrorsWhenAPIReturnsEmptyChoices(t *testing.T) {
 	// A successful but choice-less response should error rather than
 	// silently returning empty content.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -203,7 +204,7 @@ func TestNewJudgeErrorsWhenAPIReturnsEmptyChoices(t *testing.T) {
 	defer server.Close()
 
 	c := openaisdk.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test-key"))
-	judge := openai.NewJudge(&c)
+	judge := openai.NewDefaultJudge(&c)
 
 	_, err := judge.Evaluate(context.Background(), "x", []llmeval.Criterion{{Description: "a"}})
 	require.Error(t, err)
@@ -219,7 +220,7 @@ func TestJudgeReturnsParsedVerdictsToTheEvalRunner(t *testing.T) {
 	fake.reply = "1. PASS: looks fine\n2. PASS: also fine\n"
 	defer fake.server.Close()
 
-	judge := openai.NewJudge(clientPointingAt(t, fake))
+	judge := openai.NewDefaultJudge(clientPointingAt(t, fake))
 
 	result := llmeval.Run(context.Background(), llmeval.Eval{
 		Run:   func(context.Context) (string, error) { return "the output", nil },
@@ -234,4 +235,51 @@ func TestJudgeReturnsParsedVerdictsToTheEvalRunner(t *testing.T) {
 	require.Len(t, result.Criteria, 2)
 	assert.Equal(t, 1, result.Criteria[0].Passed)
 	assert.Equal(t, 1, result.Criteria[1].Passed)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JSON-format judge (NewJSONJudge + WithJSONFormat).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// sameParser compares two VerdictParser values by their function pointer
+// — Go can't compare function values directly with ==.
+func sameParser(a, b llmeval.VerdictParser) bool {
+	return reflect.ValueOf(a).Pointer() == reflect.ValueOf(b).Pointer()
+}
+
+func TestWithJSONFormatSetsJSONPromptTemplateAndParserOnTheJudge(t *testing.T) {
+	fake := newFakeAPI()
+	defer fake.server.Close()
+
+	judge := openai.NewDefaultJudge(clientPointingAt(t, fake), openai.WithJSONFormat())
+
+	assert.Equal(t, llmeval.JSONPromptTemplate, judge.PromptTemplate)
+	assert.True(t, sameParser(llmeval.JSONVerdictParser, judge.Parser),
+		"Parser should be llmeval.JSONVerdictParser")
+}
+
+func TestNewJSONJudgeReturnsAJudgeConfiguredForJSONFormat(t *testing.T) {
+	fake := newFakeAPI()
+	defer fake.server.Close()
+
+	judge := openai.NewJSONJudge(clientPointingAt(t, fake))
+
+	assert.Equal(t, llmeval.JSONPromptTemplate, judge.PromptTemplate)
+	assert.True(t, sameParser(llmeval.JSONVerdictParser, judge.Parser))
+}
+
+func TestNewJSONJudgeAcceptsAdditionalOptionsAlongsideTheJSONFormat(t *testing.T) {
+	fake := newFakeAPI()
+	fake.reply = `{"verdicts":[{"pass":true,"reason":"ok"}]}`
+	defer fake.server.Close()
+
+	judge := openai.NewJSONJudge(
+		clientPointingAt(t, fake),
+		openai.WithModel(shared.ChatModelO4Mini),
+	)
+	_, err := judge.Evaluate(context.Background(), "x", []llmeval.Criterion{{Description: "a"}})
+	require.NoError(t, err)
+
+	assert.Equal(t, string(shared.ChatModelO4Mini), fake.lastRequest(t)["model"])
+	assert.Equal(t, llmeval.JSONPromptTemplate, judge.PromptTemplate)
 }
