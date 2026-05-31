@@ -176,6 +176,84 @@ judge := &llmeval.PromptedJudge{
 }
 ```
 
+## Putting it together
+
+The canonical shape — SUT, multiple assertions, an LLM judge with criteria,
+and a budget — in one place:
+
+```go
+//go:build llmeval
+
+package summariser_test
+
+import (
+    "context"
+    "os"
+    "regexp"
+    "testing"
+
+    anthropicsdk "github.com/anthropics/anthropic-sdk-go"
+    "github.com/anthropics/anthropic-sdk-go/option"
+
+    "github.com/lordtatty/llmeval"
+    "github.com/lordtatty/llmeval/anthropic"
+    "github.com/lordtatty/llmeval/llmevaltest"
+)
+
+var endsWithPeriod = regexp.MustCompile(`\.$`)
+
+func TestSummariser(t *testing.T) {
+    client := anthropicsdk.NewClient(option.WithAPIKey(os.Getenv("ANTHROPIC_API_KEY")))
+
+    llmevaltest.Run(t, llmeval.Eval{
+        Run: func(ctx context.Context) (string, error) {
+            resp, err := client.Messages.New(ctx, anthropicsdk.MessageNewParams{
+                Model: anthropicsdk.ModelClaudeHaiku4_5, MaxTokens: 100,
+                Messages: []anthropicsdk.MessageParam{
+                    anthropicsdk.NewUserMessage(anthropicsdk.NewTextBlock(
+                        "Summarise in one sentence: ...your input text...",
+                    )),
+                },
+            })
+            if err != nil {
+                return "", err
+            }
+            // Record SUT usage so the budget check below has something to sum.
+            llmeval.RecordUsage(ctx, llmeval.Usage{
+                Provider:     anthropic.ProviderName,
+                Model:        string(resp.Model),
+                InputTokens:  int(resp.Usage.InputTokens),
+                OutputTokens: int(resp.Usage.OutputTokens),
+            })
+            return resp.Content[0].Text, nil
+        },
+
+        Repeat: 5, // surface LLM non-determinism
+
+        // Deterministic format checks.
+        Assertions: []llmeval.Assertion{
+            llmeval.Matches(endsWithPeriod),
+        },
+
+        // LLM-judged rubric items. The judge call records its own usage
+        // automatically; one call per Run evaluates all Criteria.
+        Judge: anthropic.NewDefaultJudge(&client),
+        Criteria: []llmeval.Criterion{
+            {Description: "captures the main point of the input"},
+            {Description: "is grammatically correct"},
+        },
+
+        // Aggregate-level policy: cap the suite's total dollar cost.
+        PostChecks: []llmeval.PostCheck{
+            llmeval.MaxCost(0.10, anthropic.Pricer()),
+        },
+    })
+}
+```
+
+For a stub-based version that runs without API keys, see
+[`examples/classifier/`](examples/classifier/).
+
 ## How it works
 
 An eval calls your SUT, checks the output, optionally repeats N times, and
@@ -196,6 +274,47 @@ Assertions: []llmeval.Assertion{
 
 Keep hard format/safety constraints strict; let fuzzy criteria absorb the
 expected drift.
+
+## Common questions
+
+**`MaxCost` fails with "no matching pricer"** — you didn't pass a `Pricer`
+for the provider whose usage was recorded. `MaxCost` is fail-closed:
+unpriced usage means the budget can't be certified, so it fails rather
+than silently miss cost. Pass the relevant `Pricer`s:
+
+```go
+llmeval.MaxCost(0.10, anthropic.Pricer(), openai.Pricer())
+```
+
+**SUT token usage isn't showing in `EvalResult.Usage`** — sub-module
+judges (`anthropic.NewDefaultJudge`, `openai.NewDefaultJudge`) record
+usage automatically. SUTs don't; you call `llmeval.RecordUsage(ctx, u)`
+after each LLM call inside your `Run`. See the snippet in "Putting it
+together" above.
+
+**When do I use Assertion vs Criterion vs PostCheck?**
+
+| Layer        | When                                                     | Cost            |
+|--------------|----------------------------------------------------------|-----------------|
+| `Assertion`  | Deterministic predicate per Run output                   | Free            |
+| `Criterion`  | Natural-language rubric you can't express as a predicate | One judge call  |
+| `PostCheck`  | Aggregate-level policy (budgets, multi-run patterns)     | Free, post-aggr |
+
+**My eval hits the timeout** — `Eval.Timeout` covers the whole Run: SUT
+call + assertions + judge call together. A slow SUT eats into the
+judge's budget. Either bump `Timeout` or speed up the SUT.
+
+**How do I aggregate cost across many evals?** — `EvalResult.Usage`
+holds one Run's aggregate. Walk results across multiple `Run` calls and
+feed the union into `TotalCost`:
+
+```go
+var all []llmeval.Usage
+for _, eval := range evals {
+    all = append(all, llmeval.Run(ctx, eval).Usage...)
+}
+total := llmeval.TotalCost(all, anthropic.Pricer(), openai.Pricer())
+```
 
 ## Contributing
 
