@@ -17,6 +17,8 @@
 package llmevaltest
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/lordtatty/llmeval"
@@ -29,6 +31,10 @@ type TestingT interface {
 	Helper()
 	Errorf(format string, args ...any)
 }
+
+// outputTruncateLimit caps how much of each SUT output we splice into the
+// failure message. Long LLM responses would otherwise dominate the test log.
+const outputTruncateLimit = 200
 
 // Run runs eval and marks t failed via t.Errorf if any assertion did not
 // meet its MinPassRate. If eval.Name is empty it defaults to t.Name().
@@ -45,24 +51,81 @@ func Run(t *testing.T, eval llmeval.Eval) llmeval.EvalResult {
 }
 
 // RequireSuccess marks t failed via t.Errorf for each assertion and each
-// judged criterion in result that didn't meet its MinPassRate. Run calls
-// this automatically; you only need it when you've called llmeval.Run
-// directly.
+// judged criterion in result that didn't meet its MinPassRate. Each
+// failure message includes per-failed-run detail: the Run index, the SUT
+// output (truncated), and the Reason recorded for that Run.
+//
+// Run calls this automatically; you only need it when you've called
+// llmeval.Run directly.
 func RequireSuccess(t TestingT, result llmeval.EvalResult) {
 	t.Helper()
 	if result.Pass {
 		return
 	}
-	for _, a := range result.Assertions {
+	for i, a := range result.Assertions {
 		if !a.Pass {
-			t.Errorf("eval %q: assertion %q failed: %d/%d (need ≥%v)",
-				result.Name, a.Name, a.Passed, a.Total, a.MinRate)
+			t.Errorf("eval %q: assertion %q failed: %d/%d (need ≥%v)%s",
+				result.Name, a.Name, a.Passed, a.Total, a.MinRate,
+				assertionFailureDetails(result.Runs, i))
 		}
 	}
-	for _, c := range result.Criteria {
+	for j, c := range result.Criteria {
 		if !c.Pass {
-			t.Errorf("eval %q: criterion %q failed: %d/%d (need ≥%v)",
-				result.Name, c.Description, c.Passed, c.Total, c.MinRate)
+			t.Errorf("eval %q: criterion %q failed: %d/%d (need ≥%v)%s",
+				result.Name, c.Description, c.Passed, c.Total, c.MinRate,
+				criterionFailureDetails(result.Runs, j))
 		}
 	}
+}
+
+// assertionFailureDetails returns a "\n  run N: <output> — <reason>" line for
+// every Run where the assertion at idx returned Pass=false. Errored runs
+// (where assertions never executed) are skipped — their failure is a
+// separate concern surfaced via RunResult.Err.
+func assertionFailureDetails(runs []llmeval.RunResult, idx int) string {
+	var b strings.Builder
+	for i, run := range runs {
+		if run.Err != nil || idx >= len(run.Assertions) {
+			continue
+		}
+		if ar := run.Assertions[idx]; !ar.Pass {
+			fmt.Fprintf(&b, "\n  run %d: %q%s", i+1, truncate(run.Output), reasonSuffix("", ar.Reason))
+		}
+	}
+	return b.String()
+}
+
+// criterionFailureDetails returns a "\n  run N: <output> — judge: <reason>"
+// line for every Run where the judge's verdict at idx was Pass=false.
+func criterionFailureDetails(runs []llmeval.RunResult, idx int) string {
+	var b strings.Builder
+	for i, run := range runs {
+		if run.Err != nil || idx >= len(run.Criteria) {
+			continue
+		}
+		if cr := run.Criteria[idx]; !cr.Pass {
+			fmt.Fprintf(&b, "\n  run %d: %q%s", i+1, truncate(run.Output), reasonSuffix("judge: ", cr.Reason))
+		}
+	}
+	return b.String()
+}
+
+// reasonSuffix renders " — <prefix><reason>" when reason is non-empty,
+// and the empty string otherwise — so an empty reason doesn't leave a
+// dangling separator in the failure line.
+func reasonSuffix(prefix, reason string) string {
+	if reason == "" {
+		return ""
+	}
+	return " — " + prefix + reason
+}
+
+// truncate caps s at outputTruncateLimit runes, appending an ellipsis when
+// shortened. Rune-aware so it never splits a UTF-8 sequence in half.
+func truncate(s string) string {
+	runes := []rune(s)
+	if len(runes) <= outputTruncateLimit {
+		return s
+	}
+	return string(runes[:outputTruncateLimit]) + "…"
 }
