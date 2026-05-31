@@ -197,6 +197,11 @@ Assertions: []llmeval.Assertion{
 Keep hard format/safety constraints strict; let fuzzy criteria absorb the
 expected drift.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, day-to-day commands,
+the module layout, and PR conventions.
+
 ## Linting
 
 Run [golangci-lint](https://golangci-lint.run/):
