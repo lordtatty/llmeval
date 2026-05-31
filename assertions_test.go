@@ -79,7 +79,7 @@ func TestMatchesPassesWhenRegexMatches(t *testing.T) {
 
 func TestMatchesFailsWhenRegexDoesNotMatch(t *testing.T) {
 	result := runWith("not numeric", llmeval.Matches(regexp.MustCompile(`^\d+ items$`)))
-	assert.False(t, result.Pass)
+	assert.False(t, result.Pass, "result=%+v", result)
 	assert.Equal(t, "no match", result.Runs[0].Assertions[0].Reason)
 }
 
@@ -119,7 +119,7 @@ func TestAtLeastPassesWhenPassRateMeetsThreshold(t *testing.T) {
 		[]string{"hello", "goodbye", "hello", "goodbye", "hello"},
 		llmeval.AtLeast(0.5, llmeval.Equal("hello")),
 	)
-	assert.True(t, result.Pass)
+	assert.True(t, result.Pass, "result=%+v", result)
 	assert.Equal(t, 3, result.Assertions[0].Passed)
 	assert.Equal(t, 0.5, result.Assertions[0].MinRate)
 }
@@ -130,19 +130,19 @@ func TestAtLeastFailsWhenPassRateDropsBelowThreshold(t *testing.T) {
 		[]string{"hello", "goodbye", "goodbye", "goodbye", "goodbye"},
 		llmeval.AtLeast(0.5, llmeval.Equal("hello")),
 	)
-	assert.False(t, result.Pass)
+	assert.False(t, result.Pass, "result=%+v", result)
 }
 
 func TestAtLeastClampsNegativeRateToZero(t *testing.T) {
 	// rate=-0.5 is clamped to 0; effectively "any rate is acceptable."
 	result := runWith("anything", llmeval.AtLeast(-0.5, llmeval.Equal("nope")))
-	assert.True(t, result.Pass)
+	assert.True(t, result.Pass, "result=%+v", result)
 	assert.Equal(t, 0.0, result.Assertions[0].MinRate)
 }
 
 func TestAtLeastClampsRateAboveOneToOne(t *testing.T) {
 	// rate=2.0 is clamped to 1.0; effectively strict.
 	result := runWith("hello", llmeval.AtLeast(2.0, llmeval.Equal("hello")))
-	assert.True(t, result.Pass)
+	assert.True(t, result.Pass, "result=%+v", result)
 	assert.Equal(t, 1.0, result.Assertions[0].MinRate)
 }

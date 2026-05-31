@@ -35,7 +35,7 @@ func TestJudgeIsInvokedOncePerRunWithTheSUTOutputAndAllCriteria(t *testing.T) {
 		Criteria: criteria,
 	})
 
-	assert.True(t, result.Pass)
+	assert.True(t, result.Pass, "result=%+v", result)
 }
 
 func TestJudgeIsInvokedOnceForEveryRepeatRun(t *testing.T) {
@@ -75,7 +75,7 @@ func TestTolerantCriterionPassesWhenJudgeAgreesOnEnoughRuns(t *testing.T) {
 		Criteria: []llmeval.Criterion{{Description: "passes most of the time", MinPassRate: 0.5}},
 	})
 
-	assert.True(t, result.Pass)
+	assert.True(t, result.Pass, "result=%+v", result)
 	assert.Equal(t, 3, result.Criteria[0].Passed)
 }
 
@@ -99,7 +99,7 @@ func TestStrictCriterionFailsIfAnyRunFailsTheJudge(t *testing.T) {
 		Criteria: []llmeval.Criterion{{Description: "must always hold"}},
 	})
 
-	assert.False(t, result.Pass)
+	assert.False(t, result.Pass, "result=%+v", result)
 	assert.Equal(t, 4, result.Criteria[0].Passed)
 }
 
@@ -120,7 +120,7 @@ func TestJudgeErrorMarksEveryCriterionFailedForThatRun(t *testing.T) {
 		},
 	})
 
-	assert.False(t, result.Pass)
+	assert.False(t, result.Pass, "result=%+v", result)
 	assert.Equal(t, 0, result.Criteria[0].Passed)
 	assert.Equal(t, 0, result.Criteria[1].Passed)
 }
@@ -143,7 +143,7 @@ func TestVerdictCountMismatchIsTreatedAsAJudgeError(t *testing.T) {
 		},
 	})
 
-	assert.False(t, result.Pass)
+	assert.False(t, result.Pass, "result=%+v", result)
 }
 
 func TestNoJudgeMeansNoCriteriaAreRecorded(t *testing.T) {
@@ -152,8 +152,8 @@ func TestNoJudgeMeansNoCriteriaAreRecorded(t *testing.T) {
 		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
 	})
 
-	assert.True(t, result.Pass)
-	assert.Nil(t, result.Criteria)
+	assert.True(t, result.Pass, "result=%+v", result)
+	assert.Empty(t, result.Criteria)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -247,9 +247,8 @@ func TestPromptedJudgeReportsTemplateExecuteErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "render prompt")
 }
 
-func TestPromptedJudgeReusesParsedTemplateAcrossEvaluateCalls(t *testing.T) {
-	// Users will reuse the same judge across many evals; the first call
-	// parses the template, subsequent calls don't re-parse.
+func TestPromptedJudgeCanBeReusedAcrossEvaluateCalls(t *testing.T) {
+	// Users will reuse the same judge across many evals.
 	judge := &llmeval.PromptedJudge{
 		LLMFunc: func(context.Context, string) (string, error) { return "1. PASS: fine\n", nil },
 	}

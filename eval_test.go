@@ -49,18 +49,18 @@ func TestSUTErrorIsRecordedAndCausesEvalToFail(t *testing.T) {
 		Assertions: []llmeval.Assertion{llmeval.Equal("anything")},
 	})
 
-	assert.False(t, result.Pass)
+	assert.False(t, result.Pass, "result=%+v", result)
 	require.Len(t, result.Runs, 1)
 	assert.Error(t, result.Runs[0].Err)
 }
 
-func TestSUTPanicIsRecoveredAndRecordedAsAnError(t *testing.T) {
+func TestSUTPanicDoesNotCrashTheTestProcessAndFailsTheEval(t *testing.T) {
 	result := llmeval.Run(context.Background(), llmeval.Eval{
 		Run:        func(context.Context) (string, error) { panic("boom") },
 		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
 	})
 
-	assert.False(t, result.Pass)
+	assert.False(t, result.Pass, "result=%+v", result)
 	require.Len(t, result.Runs, 1)
 	require.Error(t, result.Runs[0].Err)
 	assert.Contains(t, result.Runs[0].Err.Error(), "boom")
@@ -75,7 +75,7 @@ func TestTimeoutDoesNotFireWhenSUTReturnsInTime(t *testing.T) {
 		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
 	})
 
-	assert.True(t, result.Pass)
+	assert.True(t, result.Pass, "result=%+v", result)
 	assert.NoError(t, result.Runs[0].Err)
 }
 
@@ -89,7 +89,7 @@ func TestTimeoutFiresAndIsSurfacedAsDeadlineExceeded(t *testing.T) {
 		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
 	})
 
-	assert.False(t, result.Pass)
+	assert.False(t, result.Pass, "result=%+v", result)
 	assert.ErrorIs(t, result.Runs[0].Err, context.DeadlineExceeded)
 }
 

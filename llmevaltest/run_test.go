@@ -44,7 +44,7 @@ func TestRunDoesNotFailTheTestWhenTheEvalPasses(t *testing.T) {
 		Run:        func(context.Context) (string, error) { return "hello", nil },
 		Assertions: []llmeval.Assertion{llmeval.Equal("hello")},
 	})
-	assert.True(t, result.Pass)
+	assert.True(t, result.Pass, "result=%+v", result)
 }
 
 func TestRunDefaultsTheEvalNameToTName(t *testing.T) {
