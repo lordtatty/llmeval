@@ -26,8 +26,8 @@ test:  ## Unit tests in every module (race detector on).
 test-examples:  ## Build-tagged example evals (stub LLM, no API key needed).
 	go test -tags=llmeval ./examples/...
 
-test-live:  ## Live LLM prompt-calibration tests. Costs money; needs ANTHROPIC_API_KEY / OPENAI_API_KEY (env or .env / .env.local). Tests fail loudly if a key is missing so misconfiguration doesn't masquerade as success.
-	go test -tags=llmlive -count=1 ./anthropic ./openai
+test-live:  ## Live LLM prompt-calibration tests. Costs money; needs ANTHROPIC_API_KEY / OPENAI_API_KEY (env or .env / .env.local). Each test logs token usage + estimated cost; -v surfaces those logs.
+	go test -tags=llmlive -count=1 -v ./anthropic ./openai
 
 check: test test-examples coverage lint  ## Everything CI runs except the paid live tests — pre-PR sanity.
 

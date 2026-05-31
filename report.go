@@ -36,6 +36,14 @@ func PrintText(w io.Writer, result EvalResult) error {
 			)
 		}
 	}
+	if len(result.Usage) > 0 {
+		e.printf("\nUsage:\n")
+		for _, u := range result.Usage {
+			e.printf("  %s / %s  %d in / %d out\n",
+				u.Provider, u.Model, u.InputTokens, u.OutputTokens,
+			)
+		}
+	}
 	return e.err
 }
 

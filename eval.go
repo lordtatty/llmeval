@@ -45,8 +45,11 @@ type Eval struct {
 	// receives the full list in one call and returns one verdict per criterion.
 	Criteria []Criterion
 
-	// Timeout, if non-zero, caps each individual Run call via
-	// context.WithTimeout. The user's Run must respect ctx for this to fire.
+	// Timeout, if non-zero, caps each individual Run via context.WithTimeout.
+	// The timeout covers the whole runOnce: SUT call + assertions + judge
+	// call — so a slow SUT that eats most of the timeout will starve the
+	// judge. The user's Run (and any Judge implementation) must respect
+	// ctx for this to fire.
 	Timeout time.Duration
 
 	// Concurrency caps how many Run invocations may be in flight at once.
@@ -102,6 +105,12 @@ type EvalResult struct {
 	// Pass is true only if every AssertionRate.Pass AND every
 	// CriterionRate.Pass is true.
 	Pass bool `json:"pass"`
+
+	// Usage is the aggregated token usage across all judge and SUT LLM
+	// calls in this eval, grouped by (Provider, Model). Empty when the
+	// eval made no recorded calls — sub-module judges record
+	// automatically; SUT code records via RecordUsage(ctx, ...).
+	Usage []Usage `json:"usage,omitempty"`
 }
 
 // CriterionRate aggregates a single judged criterion across an eval's Repeat runs.
@@ -205,6 +214,12 @@ func (r RunResult) MarshalJSON() ([]byte, error) {
 // in flight (or sequentially if Concurrency < 2), applies every assertion to
 // each non-erroring output, and computes per-assertion pass rates.
 //
+// Run attaches a fresh UsageCollector to ctx so EvalResult.Usage reflects
+// only this invocation's calls. Any UsageCollector you attached to ctx via
+// NewUsageCtx is shadowed for the duration of Run and will not see records
+// from this eval — aggregate across multiple Runs by walking EvalResult.Usage
+// yourself.
+//
 // Run does not depend on the testing package. For `go test` integration use
 // llmevaltest.Run, which wraps Run and reports failures via *testing.T.
 func Run(ctx context.Context, eval Eval) EvalResult {
@@ -213,6 +228,11 @@ func Run(ctx context.Context, eval Eval) EvalResult {
 	result := EvalResult{Name: eval.Name}
 	assTallies := newCheckTallies(len(eval.Assertions))
 	critTallies := newCheckTallies(len(eval.Criteria))
+
+	// Fresh collector per eval so EvalResult.Usage reflects only this
+	// run's calls. Any collector pre-attached to ctx is shadowed for the
+	// duration of Run, not modified.
+	ctx, collector := NewUsageCtx(ctx)
 
 	runs, ran := runAll(ctx, eval, repeat, concurrency)
 
@@ -251,6 +271,7 @@ func Run(ctx context.Context, eval Eval) EvalResult {
 			result.Pass = false
 		}
 	}
+	result.Usage = collector.Aggregated()
 	return result
 }
 

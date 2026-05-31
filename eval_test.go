@@ -262,6 +262,56 @@ func TestConcurrencyRecoversSUTPanicsInEachGoroutine(t *testing.T) {
 	assert.False(t, result.Pass)
 }
 
+// ── Usage aggregation ──────────────────────────────────────────────────────
+
+func TestRunAggregatesUsageRecordedFromInsideTheSUT(t *testing.T) {
+	// The SUT records usage via RecordUsage; Run aggregates per
+	// (provider, model) into EvalResult.Usage.
+	result := llmeval.Run(context.Background(), llmeval.Eval{
+		Repeat: 3,
+		Run: func(ctx context.Context) (string, error) {
+			llmeval.RecordUsage(ctx, llmeval.Usage{
+				Provider: "openai", Model: "gpt-4.1-mini",
+				InputTokens: 100, OutputTokens: 50,
+			})
+			return "x", nil
+		},
+		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
+	})
+
+	require.Len(t, result.Usage, 1)
+	assert.Equal(t, "openai", result.Usage[0].Provider)
+	assert.Equal(t, 300, result.Usage[0].InputTokens)
+	assert.Equal(t, 150, result.Usage[0].OutputTokens)
+}
+
+func TestRunUsageIsEmptyWhenNoLLMCallsAreRecorded(t *testing.T) {
+	result := llmeval.Run(context.Background(), llmeval.Eval{
+		Run:        func(context.Context) (string, error) { return "x", nil },
+		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
+	})
+
+	assert.Empty(t, result.Usage)
+}
+
+func TestRunIsolatesUsageBetweenSeparateEvalInvocations(t *testing.T) {
+	// EvalResult.Usage reflects only that Run's calls, not anything from
+	// an earlier Run sharing the same parent ctx.
+	ctx := context.Background()
+	sut := func(ctx context.Context) (string, error) {
+		llmeval.RecordUsage(ctx, llmeval.Usage{Provider: "p", Model: "m", InputTokens: 10})
+		return "x", nil
+	}
+
+	first := llmeval.Run(ctx, llmeval.Eval{Run: sut, Assertions: []llmeval.Assertion{llmeval.Equal("x")}})
+	second := llmeval.Run(ctx, llmeval.Eval{Run: sut, Assertions: []llmeval.Assertion{llmeval.Equal("x")}})
+
+	require.Len(t, first.Usage, 1)
+	assert.Equal(t, 10, first.Usage[0].InputTokens)
+	require.Len(t, second.Usage, 1)
+	assert.Equal(t, 10, second.Usage[0].InputTokens, "second eval should not see first eval's tokens")
+}
+
 // ── RunResult.MarshalJSON ──────────────────────────────────────────────────
 
 func TestRunResultMarshalJSONOmitsErrFieldWhenNil(t *testing.T) {

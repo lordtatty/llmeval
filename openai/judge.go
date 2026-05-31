@@ -52,6 +52,40 @@ const (
 	DefaultTimeout   = 30 * time.Second
 )
 
+// ProviderName tags llmeval.Usage records emitted by judges built from
+// this package, so Pricer and llmeval.TotalCost can route correctly
+// across multi-provider setups.
+const ProviderName = "openai"
+
+// prices holds OpenAI's published per-million-token rates as of 2025-11.
+// Kept unexported so consumers can't mutate it concurrently with Pricer
+// reads; to use different rates, supply your own llmeval.Pricer ahead of
+// openai.Pricer() in TotalCost — first match wins.
+//
+// Both alias names and date-stamped variants are listed so the API's
+// returned Model string matches regardless of which form the SDK sent.
+//
+// Covered models: gpt-4.1, gpt-4.1-mini, gpt-4.1-nano. See
+// https://openai.com/pricing for current rates.
+var prices = map[shared.ChatModel]llmeval.Price{
+	shared.ChatModelGPT4_1:               {Input: 2.00, Output: 8.00},
+	shared.ChatModelGPT4_1_2025_04_14:    {Input: 2.00, Output: 8.00},
+	shared.ChatModelGPT4_1Mini:           {Input: 0.40, Output: 1.60},
+	shared.ChatModelGPT4_1Mini2025_04_14: {Input: 0.40, Output: 1.60},
+	shared.ChatModelGPT4_1Nano:           {Input: 0.10, Output: 0.40},
+	shared.ChatModelGPT4_1Nano2025_04_14: {Input: 0.10, Output: 0.40},
+}
+
+// Pricer returns an llmeval.Pricer that knows OpenAI's current model
+// prices. Compose with other providers' pricers via llmeval.TotalCost; a
+// custom pricer placed earlier in the TotalCost call overrides ours.
+func Pricer() llmeval.Pricer {
+	return llmeval.NewPricer(ProviderName, func(model string) (llmeval.Price, bool) {
+		p, ok := prices[shared.ChatModel(model)]
+		return p, ok
+	})
+}
+
 // Option configures a NewDefaultJudge or NewJSONJudge call.
 type Option func(*config)
 
@@ -126,6 +160,12 @@ func NewDefaultJudge(client *openaisdk.Client, opts ...Option) *llmeval.Prompted
 			if len(resp.Choices) == 0 {
 				return "", errors.New("openai: empty choices from chat completion")
 			}
+			llmeval.RecordUsage(ctx, llmeval.Usage{
+				Provider:     ProviderName,
+				Model:        string(resp.Model),
+				InputTokens:  int(resp.Usage.PromptTokens),
+				OutputTokens: int(resp.Usage.CompletionTokens),
+			})
 			return resp.Choices[0].Message.Content, nil
 		},
 	}

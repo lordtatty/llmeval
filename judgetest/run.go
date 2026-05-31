@@ -17,17 +17,20 @@ type TestingT interface {
 // verdict's Pass value disagrees with c.Wants, if the judge errors, or if
 // the verdict count doesn't match the criteria list.
 //
+// ctx is threaded into judge.Evaluate — attach a usage collector via
+// llmeval.NewUsageCtx if you want to track token usage from a live test.
+//
 // Use it inside a t.Run loop over Cases so the iteration is visible at
 // the call site:
 //
 //	for _, c := range judgetest.Cases {
 //	    t.Run(c.Name, func(t *testing.T) {
-//	        judgetest.AssertCase(t, judge, c)
+//	        judgetest.AssertCase(ctx, t, judge, c)
 //	    })
 //	}
-func AssertCase(t TestingT, judge llmeval.Judge, c Case) {
+func AssertCase(ctx context.Context, t TestingT, judge llmeval.Judge, c Case) {
 	t.Helper()
-	verdicts, err := judge.Evaluate(context.Background(), c.Output, c.Criteria)
+	verdicts, err := judge.Evaluate(ctx, c.Output, c.Criteria)
 	if err != nil {
 		t.Errorf("judge error: %v", err)
 		return

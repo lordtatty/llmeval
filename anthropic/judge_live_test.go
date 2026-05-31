@@ -7,6 +7,7 @@
 package anthropic_test
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
+	"github.com/lordtatty/llmeval"
 	"github.com/lordtatty/llmeval/anthropic"
 	"github.com/lordtatty/llmeval/judgetest"
 )
@@ -28,19 +30,25 @@ func TestMain(m *testing.M) {
 }
 
 func TestJudgeProducesExpectedVerdictsWithDefaultFormat(t *testing.T) {
+	ctx, collector := llmeval.NewUsageCtx(context.Background())
+	defer logUsageAndCost(t, collector)
+
 	judge := anthropic.NewDefaultJudge(newClient(t))
 	for _, c := range judgetest.Cases {
 		t.Run(c.Name, func(t *testing.T) {
-			judgetest.AssertCase(t, judge, c)
+			judgetest.AssertCase(ctx, t, judge, c)
 		})
 	}
 }
 
 func TestJudgeProducesExpectedVerdictsWithJSONFormat(t *testing.T) {
+	ctx, collector := llmeval.NewUsageCtx(context.Background())
+	defer logUsageAndCost(t, collector)
+
 	judge := anthropic.NewJSONJudge(newClient(t))
 	for _, c := range judgetest.Cases {
 		t.Run(c.Name, func(t *testing.T) {
-			judgetest.AssertCase(t, judge, c)
+			judgetest.AssertCase(ctx, t, judge, c)
 		})
 	}
 }
@@ -55,4 +63,20 @@ func newClient(t *testing.T) *anthropicsdk.Client {
 	}
 	c := anthropicsdk.NewClient(option.WithAPIKey(key))
 	return &c
+}
+
+// logUsageAndCost surfaces the token usage and an estimated dollar cost
+// for the test that just ran, so `make test-live -v` shows what each
+// suite is costing over time.
+func logUsageAndCost(t *testing.T, c *llmeval.UsageCollector) {
+	t.Helper()
+	usages := c.Aggregated()
+	if len(usages) == 0 {
+		return
+	}
+	for _, u := range usages {
+		t.Logf("usage: %s/%s  %d in / %d out",
+			u.Provider, u.Model, u.InputTokens, u.OutputTokens)
+	}
+	t.Logf("estimated cost: $%.4f", llmeval.TotalCost(usages, anthropic.Pricer()))
 }

@@ -283,3 +283,77 @@ func TestNewJSONJudgeAcceptsAdditionalOptionsAlongsideTheJSONFormat(t *testing.T
 	assert.Equal(t, string(shared.ChatModelO4Mini), fake.lastRequest(t)["model"])
 	assert.Equal(t, llmeval.JSONPromptTemplate, judge.PromptTemplate)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Usage recording (auto via NewDefaultJudge's LLMFunc closure).
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestNewDefaultJudgeRecordsUsageIntoCollectorAttachedToCtx(t *testing.T) {
+	fake := newFakeAPI()
+	defer fake.server.Close()
+
+	judge := openai.NewDefaultJudge(clientPointingAt(t, fake))
+
+	ctx, collector := llmeval.NewUsageCtx(context.Background())
+	_, err := judge.Evaluate(ctx, "x", []llmeval.Criterion{{Description: "a"}})
+	require.NoError(t, err)
+
+	records := collector.Records()
+	require.Len(t, records, 1)
+	assert.Equal(t, openai.ProviderName, records[0].Provider)
+	assert.Equal(t, "gpt-4.1-mini", records[0].Model)
+	// fakeAPI canned response is 10 prompt + 5 completion.
+	assert.Equal(t, 10, records[0].InputTokens)
+	assert.Equal(t, 5, records[0].OutputTokens)
+}
+
+func TestNewDefaultJudgeUsageRecordingIsANoOpWhenCtxHasNoCollector(t *testing.T) {
+	fake := newFakeAPI()
+	defer fake.server.Close()
+
+	judge := openai.NewDefaultJudge(clientPointingAt(t, fake))
+	_, err := judge.Evaluate(context.Background(), "x", []llmeval.Criterion{{Description: "a"}})
+	require.NoError(t, err)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pricer
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestPricerComputesCostForAKnownModel(t *testing.T) {
+	cost, ok := openai.Pricer()(llmeval.Usage{
+		Provider:     openai.ProviderName,
+		Model:        string(shared.ChatModelGPT4_1Mini),
+		InputTokens:  1_000_000,
+		OutputTokens: 1_000_000,
+	})
+	require.True(t, ok)
+	// gpt-4.1-mini is $0.40/M input + $1.60/M output = $2 for one million of each.
+	assert.InDelta(t, 2.00, cost, 1e-9)
+}
+
+func TestPricerReturnsOkFalseForADifferentProvider(t *testing.T) {
+	_, ok := openai.Pricer()(llmeval.Usage{
+		Provider: "anthropic", Model: "claude-haiku-4-5",
+	})
+	assert.False(t, ok)
+}
+
+func TestPricerReturnsOkFalseForKnownProviderButUnknownModel(t *testing.T) {
+	_, ok := openai.Pricer()(llmeval.Usage{
+		Provider: openai.ProviderName, Model: "gpt-imaginary-99",
+	})
+	assert.False(t, ok)
+}
+
+func TestPricerCostScalesLinearlyWithTokens(t *testing.T) {
+	// Half a million of each = $1 on gpt-4.1-mini ($0.40/M in + $1.60/M out).
+	cost, ok := openai.Pricer()(llmeval.Usage{
+		Provider:     openai.ProviderName,
+		Model:        string(shared.ChatModelGPT4_1Mini),
+		InputTokens:  500_000,
+		OutputTokens: 500_000,
+	})
+	require.True(t, ok)
+	assert.InDelta(t, 1.00, cost, 1e-9)
+}

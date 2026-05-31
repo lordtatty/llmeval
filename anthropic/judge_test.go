@@ -290,3 +290,77 @@ func TestNewJSONJudgeAcceptsAdditionalOptionsAlongsideTheJSONFormat(t *testing.T
 	assert.Equal(t, string(anthropicsdk.ModelClaudeOpus4_5), fake.lastRequest(t)["model"])
 	assert.Equal(t, llmeval.JSONPromptTemplate, judge.PromptTemplate)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Usage recording (auto via NewDefaultJudge's LLMFunc closure).
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestNewDefaultJudgeRecordsUsageIntoCollectorAttachedToCtx(t *testing.T) {
+	fake := newFakeAPI()
+	defer fake.server.Close()
+
+	judge := anthropic.NewDefaultJudge(clientPointingAt(t, fake))
+
+	ctx, collector := llmeval.NewUsageCtx(context.Background())
+	_, err := judge.Evaluate(ctx, "x", []llmeval.Criterion{{Description: "a"}})
+	require.NoError(t, err)
+
+	records := collector.Records()
+	require.Len(t, records, 1)
+	assert.Equal(t, anthropic.ProviderName, records[0].Provider)
+	assert.Equal(t, "claude-haiku-4-5", records[0].Model)
+	assert.Equal(t, 10, records[0].InputTokens)
+	assert.Equal(t, 5, records[0].OutputTokens)
+}
+
+func TestNewDefaultJudgeUsageRecordingIsANoOpWhenCtxHasNoCollector(t *testing.T) {
+	// Plain ctx; the judge still works, RecordUsage just doesn't write.
+	fake := newFakeAPI()
+	defer fake.server.Close()
+
+	judge := anthropic.NewDefaultJudge(clientPointingAt(t, fake))
+	_, err := judge.Evaluate(context.Background(), "x", []llmeval.Criterion{{Description: "a"}})
+	require.NoError(t, err)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pricer
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestPricerComputesCostForAKnownModel(t *testing.T) {
+	cost, ok := anthropic.Pricer()(llmeval.Usage{
+		Provider:     anthropic.ProviderName,
+		Model:        string(anthropicsdk.ModelClaudeHaiku4_5),
+		InputTokens:  1_000_000,
+		OutputTokens: 1_000_000,
+	})
+	require.True(t, ok)
+	// Haiku 4.5 is $1/M input + $5/M output = $6 for one million of each.
+	assert.InDelta(t, 6.00, cost, 1e-9)
+}
+
+func TestPricerReturnsOkFalseForADifferentProvider(t *testing.T) {
+	_, ok := anthropic.Pricer()(llmeval.Usage{
+		Provider: "openai", Model: "gpt-4.1-mini",
+	})
+	assert.False(t, ok)
+}
+
+func TestPricerReturnsOkFalseForKnownProviderButUnknownModel(t *testing.T) {
+	_, ok := anthropic.Pricer()(llmeval.Usage{
+		Provider: anthropic.ProviderName, Model: "claude-imaginary-99",
+	})
+	assert.False(t, ok)
+}
+
+func TestPricerCostScalesLinearlyWithTokens(t *testing.T) {
+	// Half a million of each = $3 on Haiku 4.5 ($1/M input + $5/M output).
+	cost, ok := anthropic.Pricer()(llmeval.Usage{
+		Provider:     anthropic.ProviderName,
+		Model:        string(anthropicsdk.ModelClaudeHaiku4_5),
+		InputTokens:  500_000,
+		OutputTokens: 500_000,
+	})
+	require.True(t, ok)
+	assert.InDelta(t, 3.00, cost, 1e-9)
+}

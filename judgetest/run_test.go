@@ -49,7 +49,7 @@ func TestAssertCaseReportsNoFailuresWhenEveryVerdictMatches(t *testing.T) {
 	c := judgetest.Cases[0]
 	fake := &fakeT{}
 
-	judgetest.AssertCase(fake, &stubJudge{reply: allMatching(c)}, c)
+	judgetest.AssertCase(context.Background(), fake, &stubJudge{reply: allMatching(c)}, c)
 
 	assert.Empty(t, fake.msgs)
 }
@@ -60,7 +60,7 @@ func TestAssertCaseReportsAFailureWhenAVerdictDisagrees(t *testing.T) {
 	reply[0].Pass = !c.Wants[0]
 	fake := &fakeT{}
 
-	judgetest.AssertCase(fake, &stubJudge{reply: reply}, c)
+	judgetest.AssertCase(context.Background(), fake, &stubJudge{reply: reply}, c)
 
 	require.Len(t, fake.msgs, 1)
 	assert.Contains(t, fake.msgs[0], "criterion 0")
@@ -70,7 +70,7 @@ func TestAssertCaseReportsAFailureWhenTheJudgeErrors(t *testing.T) {
 	c := judgetest.Cases[0]
 	fake := &fakeT{}
 
-	judgetest.AssertCase(fake, &stubJudge{err: errors.New("rate limited")}, c)
+	judgetest.AssertCase(context.Background(), fake, &stubJudge{err: errors.New("rate limited")}, c)
 
 	require.Len(t, fake.msgs, 1)
 	assert.Contains(t, fake.msgs[0], "rate limited")
@@ -91,7 +91,7 @@ func TestAssertCaseReportsAFailureWhenVerdictCountMismatchesCriteria(t *testing.
 	reply := allMatching(c)[:len(c.Wants)-1]
 	fake := &fakeT{}
 
-	judgetest.AssertCase(fake, &stubJudge{reply: reply}, c)
+	judgetest.AssertCase(context.Background(), fake, &stubJudge{reply: reply}, c)
 
 	require.Len(t, fake.msgs, 1)
 	assert.Contains(t, fake.msgs[0], "verdict")
@@ -101,7 +101,7 @@ func TestAssertCaseReportsAFailureWhenVerdictCountMismatchesCriteria(t *testing.
 func TestAssertCaseAcceptsRealTestingT(t *testing.T) {
 	c := judgetest.Cases[0]
 	t.Run("nested", func(nt *testing.T) {
-		judgetest.AssertCase(nt, &stubJudge{reply: allMatching(c)}, c)
+		judgetest.AssertCase(context.Background(), nt, &stubJudge{reply: allMatching(c)}, c)
 	})
 }
 

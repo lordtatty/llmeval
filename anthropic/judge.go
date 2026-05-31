@@ -55,6 +55,41 @@ const (
 	DefaultTimeout   = 30 * time.Second
 )
 
+// ProviderName tags llmeval.Usage records emitted by judges built from
+// this package, so Pricer and llmeval.TotalCost can route correctly
+// across multi-provider setups.
+const ProviderName = "anthropic"
+
+// prices holds Anthropic's published per-million-token rates as of 2025-11.
+// Kept unexported so consumers can't mutate it concurrently with Pricer
+// reads; to use different rates, supply your own llmeval.Pricer ahead of
+// anthropic.Pricer() in TotalCost — first match wins.
+//
+// Both alias names and date-stamped variants are listed so the API's
+// returned Model string matches regardless of which form the SDK sent.
+//
+// Covered models: claude-haiku-4-5, claude-sonnet-4-5, claude-sonnet-4-6,
+// claude-opus-4-5. See https://anthropic.com/pricing for current rates.
+var prices = map[anthropicsdk.Model]llmeval.Price{
+	anthropicsdk.ModelClaudeHaiku4_5:           {Input: 1.00, Output: 5.00},
+	anthropicsdk.ModelClaudeHaiku4_5_20251001:  {Input: 1.00, Output: 5.00},
+	anthropicsdk.ModelClaudeSonnet4_5:          {Input: 3.00, Output: 15.00},
+	anthropicsdk.ModelClaudeSonnet4_5_20250929: {Input: 3.00, Output: 15.00},
+	anthropicsdk.ModelClaudeSonnet4_6:          {Input: 3.00, Output: 15.00},
+	anthropicsdk.ModelClaudeOpus4_5:            {Input: 15.00, Output: 75.00},
+	anthropicsdk.ModelClaudeOpus4_5_20251101:   {Input: 15.00, Output: 75.00},
+}
+
+// Pricer returns an llmeval.Pricer that knows Anthropic's current model
+// prices. Compose with other providers' pricers via llmeval.TotalCost; a
+// custom pricer placed earlier in the TotalCost call overrides ours.
+func Pricer() llmeval.Pricer {
+	return llmeval.NewPricer(ProviderName, func(model string) (llmeval.Price, bool) {
+		p, ok := prices[anthropicsdk.Model(model)]
+		return p, ok
+	})
+}
+
 // Option configures a NewDefaultJudge or NewJSONJudge call.
 type Option func(*config)
 
@@ -131,6 +166,12 @@ func NewDefaultJudge(client *anthropicsdk.Client, opts ...Option) *llmeval.Promp
 			if len(resp.Content) == 0 {
 				return "", errors.New("anthropic: empty response from Claude")
 			}
+			llmeval.RecordUsage(ctx, llmeval.Usage{
+				Provider:     ProviderName,
+				Model:        string(resp.Model),
+				InputTokens:  int(resp.Usage.InputTokens),
+				OutputTokens: int(resp.Usage.OutputTokens),
+			})
 			return resp.Content[0].Text, nil
 		},
 	}

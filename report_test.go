@@ -254,3 +254,55 @@ func TestPrintJSONSurfacesWriteErrors(t *testing.T) {
 	err := llmeval.PrintJSON(failingWriter{}, sampleResult())
 	require.Error(t, err)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Usage section
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestPrintTextWritesUsageSectionWhenPresent(t *testing.T) {
+	r := sampleResult()
+	r.Usage = []llmeval.Usage{
+		{Provider: "openai", Model: "gpt-4.1-mini", InputTokens: 300, OutputTokens: 150},
+		{Provider: "anthropic", Model: "claude-haiku-4-5", InputTokens: 200, OutputTokens: 80},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, llmeval.PrintText(&buf, r))
+
+	s := buf.String()
+	assert.Contains(t, s, "Usage:")
+	assert.Contains(t, s, "openai / gpt-4.1-mini")
+	assert.Contains(t, s, "300 in / 150 out")
+	assert.Contains(t, s, "anthropic / claude-haiku-4-5")
+}
+
+func TestPrintTextOmitsUsageSectionWhenAbsent(t *testing.T) {
+	r := sampleResult()
+	r.Usage = nil
+
+	var buf bytes.Buffer
+	require.NoError(t, llmeval.PrintText(&buf, r))
+
+	assert.NotContains(t, buf.String(), "Usage:")
+}
+
+func TestPrintJSONIncludesUsageField(t *testing.T) {
+	r := sampleResult()
+	r.Usage = []llmeval.Usage{{Provider: "openai", Model: "x", InputTokens: 1, OutputTokens: 2}}
+
+	var buf bytes.Buffer
+	require.NoError(t, llmeval.PrintJSON(&buf, r))
+
+	var decoded struct {
+		Usage []struct {
+			Provider     string `json:"provider"`
+			Model        string `json:"model"`
+			InputTokens  int    `json:"inputTokens"`
+			OutputTokens int    `json:"outputTokens"`
+		} `json:"usage"`
+	}
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
+	require.Len(t, decoded.Usage, 1)
+	assert.Equal(t, "openai", decoded.Usage[0].Provider)
+	assert.Equal(t, 1, decoded.Usage[0].InputTokens)
+}
