@@ -1,0 +1,12 @@
+all: false
+filename: "mocks.go"
+dir: "{{.InterfaceDir}}/mocks"
+pkgname: "mocks"
+template: testify
+packages:
+  github.com/lordtatty/llmeval:
+    interfaces:
+      Judge:
+  github.com/lordtatty/llmeval/llmevaltest:
+    interfaces:
+      TestingT:

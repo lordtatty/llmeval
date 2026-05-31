@@ -49,10 +49,12 @@ jobs:
       - name: Library coverage must be 100%
         run: |
           # Inspect every library file's per-function coverage. Anything
-          # under 100% in the library (excluding examples/) is a fail.
+          # under 100% in the library (excluding examples/ and generated
+          # mocks/) is a fail.
           gaps=$(go tool cover -func=coverage.out \
             | grep -E '^github\.com/lordtatty/llmeval' \
             | grep -v '/examples/' \
+            | grep -v '/mocks/' \
             | grep -v '100\.0%') || true
           if [ -n "$gaps" ]; then
             echo "::error::Library coverage dropped below 100%"

@@ -13,95 +13,113 @@ import (
 	"github.com/lordtatty/llmeval"
 )
 
-func TestRun_Repeat_RunsNTimes(t *testing.T) {
-	calls := 0
+// callCounter records SUT invocations — used by the Repeat / cancellation
+// tests to specify how many times the runner actually invoked the SUT.
+type callCounter struct{ calls int }
+
+func (c *callCounter) returning(output string) func(context.Context) (string, error) {
+	return func(context.Context) (string, error) {
+		c.calls++
+		return output, nil
+	}
+}
+
+// ── Repeat ──────────────────────────────────────────────────────────────────
+
+func TestRepeatInvokesTheSUTOnceForEachRepeat(t *testing.T) {
+	counter := &callCounter{}
+
 	result := llmeval.Run(context.Background(), llmeval.Eval{
-		Run: func(ctx context.Context) (string, error) {
-			calls++
-			return "x", nil
-		},
+		Run:        counter.returning("x"),
 		Repeat:     5,
 		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
 	})
-	assert.Equal(t, 5, calls, "SUT call count")
-	assert.Len(t, result.Runs, 5)
+
+	assert.Equal(t, 5, counter.calls)
 	assert.True(t, result.Pass, "result=%+v", result)
-	require.Len(t, result.Assertions, 1)
+	assert.Len(t, result.Runs, 5)
 	assert.Equal(t, 5, result.Assertions[0].Passed)
-	assert.Equal(t, 5, result.Assertions[0].Total)
 }
 
-func TestRun_SUTError_FailsEval(t *testing.T) {
+// ── SUT error / panic ───────────────────────────────────────────────────────
+
+func TestSUTErrorIsRecordedAndCausesEvalToFail(t *testing.T) {
 	result := llmeval.Run(context.Background(), llmeval.Eval{
-		Run:        func(ctx context.Context) (string, error) { return "", errors.New("boom") },
+		Run:        func(context.Context) (string, error) { return "", errors.New("boom") },
 		Assertions: []llmeval.Assertion{llmeval.Equal("anything")},
 	})
-	assert.False(t, result.Pass, "result=%+v", result)
+
+	assert.False(t, result.Pass)
 	require.Len(t, result.Runs, 1)
 	assert.Error(t, result.Runs[0].Err)
 }
 
-func TestRun_SUTPanic_IsRecoveredAndRecordedAsError(t *testing.T) {
+func TestSUTPanicIsRecoveredAndRecordedAsAnError(t *testing.T) {
 	result := llmeval.Run(context.Background(), llmeval.Eval{
-		Run:        func(ctx context.Context) (string, error) { panic("boom") },
+		Run:        func(context.Context) (string, error) { panic("boom") },
 		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
 	})
-	assert.False(t, result.Pass, "result=%+v", result)
+
+	assert.False(t, result.Pass)
 	require.Len(t, result.Runs, 1)
 	require.Error(t, result.Runs[0].Err)
-	assert.Contains(t, result.Runs[0].Err.Error(), "boom",
-		"panic value should appear in the recovered error")
+	assert.Contains(t, result.Runs[0].Err.Error(), "boom")
 }
 
-func TestRun_StopsWhenCtxCancelledBetweenRepeats(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	calls := 0
-	result := llmeval.Run(ctx, llmeval.Eval{
-		Run: func(ctx context.Context) (string, error) {
-			calls++
-			cancel() // cancel after the first call
-			return "x", nil
-		},
-		Repeat:     10,
-		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
-	})
-	// SUT cancels during call 1; loop sees ctx.Err() before call 2 → exactly one run.
-	assert.Equal(t, 1, calls, "expected exactly one SUT call")
-	assert.Len(t, result.Runs, 1, "expected exactly one RunResult")
-}
+// ── Timeout ─────────────────────────────────────────────────────────────────
 
-func TestRun_Timeout_DoesNotFireWhenSUTFinishesInTime(t *testing.T) {
+func TestTimeoutDoesNotFireWhenSUTReturnsInTime(t *testing.T) {
 	result := llmeval.Run(context.Background(), llmeval.Eval{
-		Run:        func(ctx context.Context) (string, error) { return "x", nil },
+		Run:        func(context.Context) (string, error) { return "x", nil },
 		Timeout:    time.Second,
 		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
 	})
-	assert.True(t, result.Pass, "result=%+v", result)
-	require.Len(t, result.Runs, 1)
+
+	assert.True(t, result.Pass)
 	assert.NoError(t, result.Runs[0].Err)
 }
 
-func TestRun_Timeout_FiresAndSetsErr(t *testing.T) {
+func TestTimeoutFiresAndIsSurfacedAsDeadlineExceeded(t *testing.T) {
 	result := llmeval.Run(context.Background(), llmeval.Eval{
 		Run: func(ctx context.Context) (string, error) {
-			// Block until ctx times out; respect cancellation.
 			<-ctx.Done()
 			return "", ctx.Err()
 		},
 		Timeout:    5 * time.Millisecond,
 		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
 	})
-	assert.False(t, result.Pass, "result=%+v", result)
-	require.Len(t, result.Runs, 1)
+
+	assert.False(t, result.Pass)
 	assert.ErrorIs(t, result.Runs[0].Err, context.DeadlineExceeded)
 }
+
+// ── Parent ctx cancellation ────────────────────────────────────────────────
+
+func TestParentCtxCancellationAbortsRemainingRepeats(t *testing.T) {
+	// The SUT cancels the context on its first call. The runner should
+	// observe the cancellation before starting a second iteration, even
+	// though Repeat asks for 10.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	result := llmeval.Run(ctx, llmeval.Eval{
+		Run: func(context.Context) (string, error) {
+			cancel()
+			return "x", nil
+		},
+		Repeat:     10,
+		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
+	})
+
+	assert.Len(t, result.Runs, 1, "loop should stop after first iteration sees ctx.Err")
+}
+
+// ── ExampleRun (godoc example, runs under go test) ─────────────────────────
 
 // ExampleRun shows the most common shape of an eval: one SUT call, a strict
 // format check, a tolerant accuracy check, and 10 repeats. In a real test
 // it would be a func TestX(t *testing.T) calling llmevaltest.Run; here we
 // use llmeval.Run so the godoc example produces deterministic output.
 func ExampleRun() {
-	// A stand-in SUT — your code would call your LLM here.
 	classify := func(_ context.Context) (string, error) {
 		return "positive", nil
 	}

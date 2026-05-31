@@ -8,81 +8,125 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/lordtatty/llmeval"
 	"github.com/lordtatty/llmeval/llmevaltest"
+	"github.com/lordtatty/llmeval/llmevaltest/mocks"
 )
 
-// fakeT implements llmevaltest.TestingT so we can verify RequireSuccess's
-// failure path without poisoning the surrounding test.
-type fakeT struct {
-	helperCalls int
-	errors      []string
+// errorfRecorder is a TestingT mock that captures the formatted message of
+// every Errorf call so the test can inspect its shape (substring checks,
+// ordering) rather than configuring exact-argument expectations on mockery.
+type errorfRecorder struct {
+	messages []string
+	T        *mocks.MockTestingT
 }
 
-func (f *fakeT) Helper() { f.helperCalls++ }
-func (f *fakeT) Errorf(format string, args ...any) {
-	f.errors = append(f.errors, fmt.Sprintf(format, args...))
+func captureErrorfMessages(t *testing.T) *errorfRecorder {
+	r := &errorfRecorder{T: mocks.NewMockTestingT(t)}
+	r.T.EXPECT().Helper().Maybe()
+	r.T.EXPECT().Errorf(mock.AnythingOfType("string"), mock.Anything).
+		Run(func(format string, args ...any) {
+			r.messages = append(r.messages, fmt.Sprintf(format, args...))
+		}).Maybe()
+	return r
 }
 
-func TestRun_PassingEval_DoesNotFailT(t *testing.T) {
+// ─────────────────────────────────────────────────────────────────────────────
+// llmevaltest.Run — the *testing.T entry point.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestRunDoesNotFailTheTestWhenTheEvalPasses(t *testing.T) {
+	// If Run had marked t failed, this enclosing test would itself be failing.
 	result := llmevaltest.Run(t, llmeval.Eval{
-		Run:        func(ctx context.Context) (string, error) { return "hello", nil },
+		Run:        func(context.Context) (string, error) { return "hello", nil },
 		Assertions: []llmeval.Assertion{llmeval.Equal("hello")},
 	})
-	assert.True(t, result.Pass, "result=%+v", result)
-	// If Run had called t.Errorf, this test would already be failing.
+	assert.True(t, result.Pass)
 }
 
-func TestRun_NameDefaultsToTName(t *testing.T) {
+func TestRunDefaultsTheEvalNameToTName(t *testing.T) {
 	result := llmevaltest.Run(t, llmeval.Eval{
-		Run:        func(ctx context.Context) (string, error) { return "x", nil },
+		Run:        func(context.Context) (string, error) { return "x", nil },
 		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
 	})
 	assert.Equal(t, t.Name(), result.Name)
 }
 
-func TestRequireSuccess_PassingEval_DoesNothing(t *testing.T) {
-	fake := &fakeT{}
-	llmevaltest.RequireSuccess(fake, llmeval.EvalResult{Pass: true})
-	assert.Empty(t, fake.errors)
-	assert.Equal(t, 1, fake.helperCalls, "Helper should always be called once")
+// ─────────────────────────────────────────────────────────────────────────────
+// RequireSuccess — what the *testing.T sees when an eval fails.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestRequireSuccessIsSilentForAPassingEval(t *testing.T) {
+	// The behaviour is "Errorf is never called for a passing eval."
+	// Helper() may or may not be called; we don't constrain it (that would
+	// couple the test to implementation rather than behaviour).
+	m := mocks.NewMockTestingT(t)
+	m.EXPECT().Helper().Maybe()
+	// No Errorf expectation — if RequireSuccess calls it, mockery fails the test.
+
+	llmevaltest.RequireSuccess(m, llmeval.EvalResult{Pass: true})
 }
 
-func TestRequireSuccess_FailingEval_CallsErrorfPerFailedAssertion(t *testing.T) {
-	fake := &fakeT{}
-	llmevaltest.RequireSuccess(fake, llmeval.EvalResult{
+func TestRequireSuccessReportsOneErrorPerFailedAssertion(t *testing.T) {
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
 		Name: "demo",
 		Pass: false,
 		Assertions: []llmeval.AssertionRate{
 			{Name: "a", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
-			{Name: "b", Passed: 1, Total: 1, MinRate: 1.0, Pass: true}, // passed — should not generate an Errorf
+			{Name: "b", Passed: 1, Total: 1, MinRate: 1.0, Pass: true}, // passed → no Errorf
 			{Name: "c", Passed: 3, Total: 5, MinRate: 0.8, Pass: false},
 		},
 	})
-	require.Len(t, fake.errors, 2, "one Errorf per failed assertion")
-	assert.Contains(t, fake.errors[0], `assertion "a" failed: 0/1`)
-	assert.Contains(t, fake.errors[1], `assertion "c" failed: 3/5`)
+
+	require.Len(t, r.messages, 2)
+	assert.Contains(t, r.messages[0], `assertion "a" failed: 0/1`)
+	assert.Contains(t, r.messages[1], `assertion "c" failed: 3/5`)
 }
 
-func TestRequireSuccess_FailingEval_CallsErrorfPerFailedCriterion(t *testing.T) {
-	fake := &fakeT{}
-	llmevaltest.RequireSuccess(fake, llmeval.EvalResult{
+func TestRequireSuccessReportsOneErrorPerFailedCriterion(t *testing.T) {
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
 		Name: "demo",
 		Pass: false,
 		Criteria: []llmeval.CriterionRate{
 			{Description: "is concise", Passed: 1, Total: 5, MinRate: 0.8, Pass: false},
-			{Description: "is on-topic", Passed: 5, Total: 5, MinRate: 1.0, Pass: true}, // passed — no Errorf
+			{Description: "is on-topic", Passed: 5, Total: 5, MinRate: 1.0, Pass: true},
 		},
 	})
-	require.Len(t, fake.errors, 1)
-	assert.Contains(t, fake.errors[0], `criterion "is concise" failed: 1/5`)
+
+	require.Len(t, r.messages, 1)
+	assert.Contains(t, r.messages[0], `criterion "is concise" failed: 1/5`)
 }
 
-func TestRequireSuccess_FailedAssertion_IncludesPerRunDetails(t *testing.T) {
-	fake := &fakeT{}
-	llmevaltest.RequireSuccess(fake, llmeval.EvalResult{
+func TestRequireSuccessReportsAssertionsAndCriteriaTogether(t *testing.T) {
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+		Name: "mixed",
+		Pass: false,
+		Assertions: []llmeval.AssertionRate{
+			{Name: "a", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
+		},
+		Criteria: []llmeval.CriterionRate{
+			{Description: "c1", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
+		},
+	})
+
+	assert.Len(t, r.messages, 2)
+}
+
+// ── Per-run detail in failure messages ──────────────────────────────────────
+
+func TestFailedAssertionMessageIncludesPerFailedRunDetail(t *testing.T) {
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
 		Name: "demo",
 		Pass: false,
 		Assertions: []llmeval.AssertionRate{
@@ -94,23 +138,22 @@ func TestRequireSuccess_FailedAssertion_IncludesPerRunDetails(t *testing.T) {
 			{Output: "blue", Assertions: []llmeval.AssertionResult{{Pass: false, Reason: `got "blue"`}}},
 		},
 	})
-	require.Len(t, fake.errors, 1)
-	msg := fake.errors[0]
-	// The header still includes pass-rate info.
+
+	require.Len(t, r.messages, 1)
+	msg := r.messages[0]
 	assert.Contains(t, msg, `assertion "equals positive" failed: 1/3`)
-	// And now also per-failed-run details: run number, output, reason.
 	assert.Contains(t, msg, "run 2")
 	assert.Contains(t, msg, "neutral")
 	assert.Contains(t, msg, `got "neutral"`)
 	assert.Contains(t, msg, "run 3")
 	assert.Contains(t, msg, "blue")
-	// The passing run (run 1) should NOT be in the details.
-	assert.NotContains(t, msg, "run 1")
+	assert.NotContains(t, msg, "run 1", "the passing run should not be in the failure details")
 }
 
-func TestRequireSuccess_FailedCriterion_IncludesJudgeReason(t *testing.T) {
-	fake := &fakeT{}
-	llmevaltest.RequireSuccess(fake, llmeval.EvalResult{
+func TestFailedCriterionMessageIncludesTheJudgesReason(t *testing.T) {
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
 		Name: "demo",
 		Pass: false,
 		Criteria: []llmeval.CriterionRate{
@@ -118,61 +161,24 @@ func TestRequireSuccess_FailedCriterion_IncludesJudgeReason(t *testing.T) {
 		},
 		Runs: []llmeval.RunResult{
 			{Output: "summary about TLS handshake", Criteria: []llmeval.CriterionResult{{Pass: true}}},
-			{Output: "summary about encryption", Criteria: []llmeval.CriterionResult{{Pass: false, Reason: "summary discusses encryption but never names TLS"}}},
+			{Output: "summary about encryption",
+				Criteria: []llmeval.CriterionResult{{Pass: false, Reason: "summary discusses encryption but never names TLS"}}},
 		},
 	})
-	require.Len(t, fake.errors, 1)
-	msg := fake.errors[0]
+
+	require.Len(t, r.messages, 1)
+	msg := r.messages[0]
 	assert.Contains(t, msg, `criterion "mentions TLS" failed: 1/2`)
 	assert.Contains(t, msg, "run 2")
 	assert.Contains(t, msg, "summary about encryption")
 	assert.Contains(t, msg, "summary discusses encryption but never names TLS")
 }
 
-func TestRequireSuccess_EmptyAssertionReason_OmitsTrailingSeparator(t *testing.T) {
-	// A custom assertion may leave Reason empty. The detail line should
-	// just show "run N: <output>" without a dangling "— ".
-	fake := &fakeT{}
-	llmevaltest.RequireSuccess(fake, llmeval.EvalResult{
-		Name: "demo",
-		Pass: false,
-		Assertions: []llmeval.AssertionRate{
-			{Name: "a", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
-		},
-		Runs: []llmeval.RunResult{
-			{Output: "x", Assertions: []llmeval.AssertionResult{{Pass: false, Reason: ""}}},
-		},
-	})
-	require.Len(t, fake.errors, 1)
-	msg := fake.errors[0]
-	assert.Contains(t, msg, `run 1: "x"`)
-	assert.NotContains(t, msg, `"x" —`, "should not dangle a separator when Reason is empty")
-}
-
-func TestRequireSuccess_EmptyCriterionReason_OmitsTrailingSeparator(t *testing.T) {
-	// Same for criteria — if the judge returns Pass=false with no Reason,
-	// don't append " — judge:" with nothing after.
-	fake := &fakeT{}
-	llmevaltest.RequireSuccess(fake, llmeval.EvalResult{
-		Name: "demo",
-		Pass: false,
-		Criteria: []llmeval.CriterionRate{
-			{Description: "c", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
-		},
-		Runs: []llmeval.RunResult{
-			{Output: "x", Criteria: []llmeval.CriterionResult{{Pass: false, Reason: ""}}},
-		},
-	})
-	require.Len(t, fake.errors, 1)
-	msg := fake.errors[0]
-	assert.Contains(t, msg, `run 1: "x"`)
-	assert.NotContains(t, msg, "judge:", "should not include 'judge:' prefix when Reason is empty")
-}
-
-func TestRequireSuccess_LongOutputIsTruncated(t *testing.T) {
+func TestLongSUTOutputIsTruncatedInFailureMessages(t *testing.T) {
 	long := strings.Repeat("x", 500)
-	fake := &fakeT{}
-	llmevaltest.RequireSuccess(fake, llmeval.EvalResult{
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
 		Name: "demo",
 		Pass: false,
 		Assertions: []llmeval.AssertionRate{
@@ -182,41 +188,20 @@ func TestRequireSuccess_LongOutputIsTruncated(t *testing.T) {
 			{Output: long, Assertions: []llmeval.AssertionResult{{Pass: false, Reason: "nope"}}},
 		},
 	})
-	require.Len(t, fake.errors, 1)
-	msg := fake.errors[0]
-	// Long output is truncated with an ellipsis marker.
-	assert.Contains(t, msg, "…")
-	// And the message doesn't contain the full 500-x payload.
-	assert.NotContains(t, msg, long)
+
+	require.Len(t, r.messages, 1)
+	assert.Contains(t, r.messages[0], "…")
+	assert.NotContains(t, r.messages[0], long)
 }
 
-func TestRequireSuccess_ErroredRunsAreNotReportedAsFailedCriteria(t *testing.T) {
-	// Symmetric with the assertion case: a Run that errored before the judge
-	// step shouldn't appear in the criterion failure details.
-	fake := &fakeT{}
-	llmevaltest.RequireSuccess(fake, llmeval.EvalResult{
-		Name: "demo",
-		Pass: false,
-		Criteria: []llmeval.CriterionRate{
-			{Description: "c", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
-		},
-		Runs: []llmeval.RunResult{
-			{Err: errors.New("SUT exploded")},
-			{Output: "x", Criteria: []llmeval.CriterionResult{{Pass: false, Reason: "judge says no"}}},
-		},
-	})
-	require.Len(t, fake.errors, 1)
-	msg := fake.errors[0]
-	assert.NotContains(t, msg, "SUT exploded")
-	assert.Contains(t, msg, "run 2")
-	assert.Contains(t, msg, "judge says no")
-}
+// ── Errored runs are not attributed to assertion / criterion failures ─────
 
-func TestRequireSuccess_ErroredRunsAreNotReportedAsFailedAssertions(t *testing.T) {
-	// A run with Err set never executed the assertions. The detail block
-	// shouldn't show that run as an assertion failure.
-	fake := &fakeT{}
-	llmevaltest.RequireSuccess(fake, llmeval.EvalResult{
+func TestErroredRunsAreNotReportedAsAssertionFailures(t *testing.T) {
+	// A Run that errored never executed the assertions — attributing the
+	// failure to it would be misleading.
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
 		Name: "demo",
 		Pass: false,
 		Assertions: []llmeval.AssertionRate{
@@ -227,25 +212,70 @@ func TestRequireSuccess_ErroredRunsAreNotReportedAsFailedAssertions(t *testing.T
 			{Output: "x", Assertions: []llmeval.AssertionResult{{Pass: false, Reason: "wrong"}}},
 		},
 	})
-	require.Len(t, fake.errors, 1)
-	msg := fake.errors[0]
-	// The errored run (1) shouldn't appear; the real failure (2) should.
-	assert.NotContains(t, msg, "SUT exploded")
-	assert.Contains(t, msg, "run 2")
-	assert.Contains(t, msg, "wrong")
+
+	require.Len(t, r.messages, 1)
+	assert.NotContains(t, r.messages[0], "SUT exploded")
+	assert.Contains(t, r.messages[0], "run 2")
+	assert.Contains(t, r.messages[0], "wrong")
 }
 
-func TestRequireSuccess_FailingEval_ReportsBothAssertionsAndCriteria(t *testing.T) {
-	fake := &fakeT{}
-	llmevaltest.RequireSuccess(fake, llmeval.EvalResult{
-		Name: "mixed",
+func TestErroredRunsAreNotReportedAsCriterionFailures(t *testing.T) {
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+		Name: "demo",
+		Pass: false,
+		Criteria: []llmeval.CriterionRate{
+			{Description: "c", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
+		},
+		Runs: []llmeval.RunResult{
+			{Err: errors.New("SUT exploded")},
+			{Output: "x", Criteria: []llmeval.CriterionResult{{Pass: false, Reason: "judge says no"}}},
+		},
+	})
+
+	require.Len(t, r.messages, 1)
+	assert.NotContains(t, r.messages[0], "SUT exploded")
+	assert.Contains(t, r.messages[0], "run 2")
+	assert.Contains(t, r.messages[0], "judge says no")
+}
+
+// ── Empty-reason handling ───────────────────────────────────────────────────
+
+func TestAnEmptyAssertionReasonOmitsTheDashSeparator(t *testing.T) {
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+		Name: "demo",
 		Pass: false,
 		Assertions: []llmeval.AssertionRate{
 			{Name: "a", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
 		},
-		Criteria: []llmeval.CriterionRate{
-			{Description: "c1", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
+		Runs: []llmeval.RunResult{
+			{Output: "x", Assertions: []llmeval.AssertionResult{{Pass: false, Reason: ""}}},
 		},
 	})
-	require.Len(t, fake.errors, 2)
+
+	require.Len(t, r.messages, 1)
+	assert.Contains(t, r.messages[0], `run 1: "x"`)
+	assert.NotContains(t, r.messages[0], `"x" —`)
+}
+
+func TestAnEmptyCriterionReasonOmitsTheJudgePrefix(t *testing.T) {
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+		Name: "demo",
+		Pass: false,
+		Criteria: []llmeval.CriterionRate{
+			{Description: "c", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
+		},
+		Runs: []llmeval.RunResult{
+			{Output: "x", Criteria: []llmeval.CriterionResult{{Pass: false, Reason: ""}}},
+		},
+	})
+
+	require.Len(t, r.messages, 1)
+	assert.Contains(t, r.messages[0], `run 1: "x"`)
+	assert.NotContains(t, r.messages[0], "judge:")
 }
