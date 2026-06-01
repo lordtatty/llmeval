@@ -4,7 +4,7 @@ go 1.26.3
 
 require (
 	github.com/joho/godotenv v1.5.1
-	github.com/lordtatty/llmeval v0.0.0-20260531205829-d51f9a9b9279
+	github.com/lordtatty/llmeval v0.1.1-0.20260601014106-268432f89e8a
 	github.com/openai/openai-go v1.12.0
 	github.com/stretchr/testify v1.11.1
 )
