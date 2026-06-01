@@ -42,21 +42,21 @@ var validLabels = []string{"positive", "negative", "neutral"}
 // Strict, single-shot: clearly-positive text must be labelled "positive".
 // Demonstrates: Equal, default Repeat (1).
 func TestClassify_LabelsPositive(t *testing.T) {
-	llmevaltest.Run(t, llmeval.Eval{
+	llmevaltest.Run(t, llmeval.Eval[string]{
 		Run: func(ctx context.Context) (string, error) {
 			return classifier.Classify(ctx, "I absolutely love this product!")
 		},
-		Assertions: []llmeval.Assertion{llmeval.Equal("positive")},
+		Assertions: []llmeval.Assertion[string]{llmeval.Equal("positive")},
 	})
 }
 
 // Strict, single-shot: clearly-negative text must be labelled "negative".
 func TestClassify_LabelsNegative(t *testing.T) {
-	llmevaltest.Run(t, llmeval.Eval{
+	llmevaltest.Run(t, llmeval.Eval[string]{
 		Run: func(ctx context.Context) (string, error) {
 			return classifier.Classify(ctx, "This is the worst thing I've ever bought.")
 		},
-		Assertions: []llmeval.Assertion{llmeval.Equal("negative")},
+		Assertions: []llmeval.Assertion[string]{llmeval.Equal("negative")},
 	})
 }
 
@@ -64,11 +64,11 @@ func TestClassify_LabelsNegative(t *testing.T) {
 // Catches an LLM that invents a fourth label, adds punctuation, or rambles.
 // Demonstrates: OneOf.
 func TestClassify_OutputIsValidLabel(t *testing.T) {
-	llmevaltest.Run(t, llmeval.Eval{
+	llmevaltest.Run(t, llmeval.Eval[string]{
 		Run: func(ctx context.Context) (string, error) {
 			return classifier.Classify(ctx, "It's fine, I guess.")
 		},
-		Assertions: []llmeval.Assertion{llmeval.OneOf(validLabels...)},
+		Assertions: []llmeval.Assertion[string]{llmeval.OneOf(validLabels...)},
 	})
 }
 
@@ -78,12 +78,12 @@ func TestClassify_OutputIsValidLabel(t *testing.T) {
 //
 // Demonstrates: Repeat, AtLeast (tolerant), strict assertion in the same eval.
 func TestClassify_AccuratePositive_WithDrift(t *testing.T) {
-	llmevaltest.Run(t, llmeval.Eval{
+	llmevaltest.Run(t, llmeval.Eval[string]{
 		Run: func(ctx context.Context) (string, error) {
 			return classifier.FlakyClassify(ctx, "I love this!")
 		},
 		Repeat: 10,
-		Assertions: []llmeval.Assertion{
+		Assertions: []llmeval.Assertion[string]{
 			llmeval.AtLeast(0.6, llmeval.Equal("positive")), // accuracy: ≥60% labelled positive
 			llmeval.OneOf(validLabels...),                   // format: every output is a valid label
 		},
@@ -99,12 +99,12 @@ func TestClassify_AccuratePositive_WithDrift(t *testing.T) {
 // In production swap classifier.StubPricer() for anthropic.Pricer() /
 // openai.Pricer() (or compose multiples) — the eval shape doesn't change.
 func TestClassify_WithBudgetEnforcement(t *testing.T) {
-	llmevaltest.Run(t, llmeval.Eval{
+	llmevaltest.Run(t, llmeval.Eval[string]{
 		Run: func(ctx context.Context) (string, error) {
 			return classifier.Classify(ctx, "I love this product!")
 		},
 		Repeat:     5,
-		Assertions: []llmeval.Assertion{llmeval.OneOf(validLabels...)},
+		Assertions: []llmeval.Assertion[string]{llmeval.OneOf(validLabels...)},
 		Judge:      classifier.FakeJudge{},
 		Criteria: []llmeval.Criterion{
 			{Description: "output is a single word"},
@@ -125,14 +125,14 @@ func TestClassify_WithBudgetEnforcement(t *testing.T) {
 //
 // One judge call per Run evaluates BOTH criteria in one go.
 func TestClassify_JudgedByFakeLLM(t *testing.T) {
-	llmevaltest.Run(t, llmeval.Eval{
+	llmevaltest.Run(t, llmeval.Eval[string]{
 		Run: func(ctx context.Context) (string, error) {
 			return classifier.Classify(ctx, "I love this product!")
 		},
 		Repeat: 3,
 
 		// Pure check: the output is exactly "positive".
-		Assertions: []llmeval.Assertion{llmeval.Equal("positive")},
+		Assertions: []llmeval.Assertion[string]{llmeval.Equal("positive")},
 
 		// LLM-judged criteria: things a regex/equality check can't express well.
 		Judge: classifier.FakeJudge{},

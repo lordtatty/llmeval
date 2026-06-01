@@ -12,12 +12,13 @@
 //	)
 //
 //	func TestSentimentClassifier(t *testing.T) {
-//	    llmevaltest.Run(t, llmeval.Eval{ ... })
+//	    llmevaltest.Run(t, llmeval.Eval[string]{ ... })
 //	}
 package llmevaltest
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -40,18 +41,18 @@ type TestingT interface {
 const outputTruncateLimit = 200
 
 // Option configures Run / RequireSuccess.
-type Option func(*config)
+type Option[T any] func(*config[T])
 
-type config struct {
+type config[T any] struct {
 	// reporter writes the failure-detail report. Nil silences auto-logging.
-	reporter func(io.Writer, llmeval.EvalResult) error
+	reporter func(io.Writer, llmeval.EvalResult[T]) error
 }
 
 // WithReporter overrides the failure-detail reporter used by Run /
 // RequireSuccess on a failing eval. The default is llmeval.PrintText. Pass
 // nil to silence the auto-log entirely.
-func WithReporter(fn func(io.Writer, llmeval.EvalResult) error) Option {
-	return func(c *config) { c.reporter = fn }
+func WithReporter[T any](fn func(io.Writer, llmeval.EvalResult[T]) error) Option[T] {
+	return func(c *config[T]) { c.reporter = fn }
 }
 
 // Run runs eval and marks t failed via t.Errorf if any assertion did not
@@ -61,7 +62,7 @@ func WithReporter(fn func(io.Writer, llmeval.EvalResult) error) Option {
 // is written to t.Log before the per-assertion failure messages, so
 // debugging starts with full per-run detail. The returned EvalResult lets
 // callers inspect details after.
-func Run(t *testing.T, eval llmeval.Eval, opts ...Option) llmeval.EvalResult {
+func Run[T any](t *testing.T, eval llmeval.Eval[T], opts ...Option[T]) llmeval.EvalResult[T] {
 	t.Helper()
 	if eval.Name == "" {
 		eval.Name = t.Name()
@@ -79,12 +80,12 @@ func Run(t *testing.T, eval llmeval.Eval, opts ...Option) llmeval.EvalResult {
 //
 // Run calls this automatically; you only need it when you've called
 // llmeval.Run directly.
-func RequireSuccess(t TestingT, result llmeval.EvalResult, opts ...Option) {
+func RequireSuccess[T any](t TestingT, result llmeval.EvalResult[T], opts ...Option[T]) {
 	t.Helper()
 	if result.Pass {
 		return
 	}
-	cfg := config{reporter: llmeval.PrintText}
+	cfg := config[T]{reporter: llmeval.PrintText[T]}
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -119,14 +120,14 @@ func RequireSuccess(t TestingT, result llmeval.EvalResult, opts ...Option) {
 // every Run where the assertion at idx returned Pass=false. Errored runs
 // (where assertions never executed) are skipped — their failure is a
 // separate concern surfaced via RunResult.Err.
-func assertionFailureDetails(runs []llmeval.RunResult, idx int) string {
+func assertionFailureDetails[T any](runs []llmeval.RunResult[T], idx int) string {
 	var b strings.Builder
 	for i, run := range runs {
 		if run.Err != nil || idx >= len(run.Assertions) {
 			continue
 		}
 		if ar := run.Assertions[idx]; !ar.Pass {
-			fmt.Fprintf(&b, "\n  run %d: %q%s", i+1, truncate(run.Output), reasonSuffix("", ar.Reason))
+			fmt.Fprintf(&b, "\n  run %d: %q%s", i+1, truncate(outputString(run.Output)), reasonSuffix("", ar.Reason))
 		}
 	}
 	return b.String()
@@ -134,17 +135,31 @@ func assertionFailureDetails(runs []llmeval.RunResult, idx int) string {
 
 // criterionFailureDetails returns a "\n  run N: <output> — judge: <reason>"
 // line for every Run where the judge's verdict at idx was Pass=false.
-func criterionFailureDetails(runs []llmeval.RunResult, idx int) string {
+func criterionFailureDetails[T any](runs []llmeval.RunResult[T], idx int) string {
 	var b strings.Builder
 	for i, run := range runs {
 		if run.Err != nil || idx >= len(run.Criteria) {
 			continue
 		}
 		if cr := run.Criteria[idx]; !cr.Pass {
-			fmt.Fprintf(&b, "\n  run %d: %q%s", i+1, truncate(run.Output), reasonSuffix("judge: ", cr.Reason))
+			fmt.Fprintf(&b, "\n  run %d: %q%s", i+1, truncate(outputString(run.Output)), reasonSuffix("judge: ", cr.Reason))
 		}
 	}
 	return b.String()
+}
+
+// outputString renders a typed Run output as a string for inclusion in
+// failure messages. String values pass through unchanged; other T types
+// serialise as JSON, with a final %+v fallback if json.Marshal fails.
+func outputString[T any](v T) string {
+	if s, ok := any(v).(string); ok {
+		return s
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%+v", v)
+	}
+	return string(b)
 }
 
 // reasonSuffix renders " — <prefix><reason>" when reason is non-empty,

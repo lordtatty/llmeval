@@ -29,7 +29,7 @@ func TestJudgeIsInvokedOncePerRunWithTheSUTOutputAndAllCriteria(t *testing.T) {
 		Return([]llmeval.CriterionResult{{Pass: true}, {Pass: true}}, nil).
 		Once()
 
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Run:      func(context.Context) (string, error) { return "the summary", nil },
 		Judge:    judge,
 		Criteria: criteria,
@@ -45,7 +45,7 @@ func TestJudgeIsInvokedOnceForEveryRepeatRun(t *testing.T) {
 		Return([]llmeval.CriterionResult{{Pass: true}}, nil).
 		Times(5)
 
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Run:      func(context.Context) (string, error) { return "x", nil },
 		Repeat:   5,
 		Judge:    judge,
@@ -68,7 +68,7 @@ func TestTolerantCriterionPassesWhenJudgeAgreesOnEnoughRuns(t *testing.T) {
 	expectNextVerdict(false)
 	expectNextVerdict(true)
 
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Run:      func(context.Context) (string, error) { return "x", nil },
 		Repeat:   5,
 		Judge:    judge,
@@ -92,7 +92,7 @@ func TestStrictCriterionFailsIfAnyRunFailsTheJudge(t *testing.T) {
 	expectNextVerdict(true)
 	expectNextVerdict(true)
 
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Run:      func(context.Context) (string, error) { return "x", nil },
 		Repeat:   5,
 		Judge:    judge,
@@ -110,7 +110,7 @@ func TestJudgeErrorMarksEveryCriterionFailedForThatRun(t *testing.T) {
 		Return(nil, errors.New("LLM unreachable")).
 		Times(3)
 
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Run:    func(context.Context) (string, error) { return "x", nil },
 		Repeat: 3,
 		Judge:  judge,
@@ -134,7 +134,7 @@ func TestVerdictCountMismatchIsTreatedAsAJudgeError(t *testing.T) {
 		Return([]llmeval.CriterionResult{{Pass: true}}, nil). // 1 verdict
 		Once()
 
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Run:   func(context.Context) (string, error) { return "x", nil },
 		Judge: judge,
 		Criteria: []llmeval.Criterion{
@@ -147,9 +147,9 @@ func TestVerdictCountMismatchIsTreatedAsAJudgeError(t *testing.T) {
 }
 
 func TestNoJudgeMeansNoCriteriaAreRecorded(t *testing.T) {
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Run:        func(context.Context) (string, error) { return "x", nil },
-		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
+		Assertions: []llmeval.Assertion[string]{llmeval.Equal("x")},
 	})
 
 	assert.True(t, result.Pass, "result=%+v", result)

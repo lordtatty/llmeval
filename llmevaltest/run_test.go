@@ -46,26 +46,26 @@ func captureErrorfMessages(t *testing.T) *errorfRecorder {
 
 func TestRunDoesNotFailTheTestWhenTheEvalPasses(t *testing.T) {
 	// If Run had marked t failed, this enclosing test would itself be failing.
-	result := llmevaltest.Run(t, llmeval.Eval{
+	result := llmevaltest.Run(t, llmeval.Eval[string]{
 		Run:        func(context.Context) (string, error) { return "hello", nil },
-		Assertions: []llmeval.Assertion{llmeval.Equal("hello")},
+		Assertions: []llmeval.Assertion[string]{llmeval.Equal("hello")},
 	})
 	assert.True(t, result.Pass, "result=%+v", result)
 }
 
 func TestRunDefaultsTheEvalNameToTName(t *testing.T) {
-	result := llmevaltest.Run(t, llmeval.Eval{
+	result := llmevaltest.Run(t, llmeval.Eval[string]{
 		Run:        func(context.Context) (string, error) { return "x", nil },
-		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
+		Assertions: []llmeval.Assertion[string]{llmeval.Equal("x")},
 	})
 	assert.Equal(t, t.Name(), result.Name)
 }
 
 func TestRunPreservesAUserSuppliedEvalName(t *testing.T) {
-	result := llmevaltest.Run(t, llmeval.Eval{
+	result := llmevaltest.Run(t, llmeval.Eval[string]{
 		Name:       "my custom name",
 		Run:        func(context.Context) (string, error) { return "x", nil },
-		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
+		Assertions: []llmeval.Assertion[string]{llmeval.Equal("x")},
 	})
 	assert.Equal(t, "my custom name", result.Name)
 }
@@ -82,13 +82,13 @@ func TestRequireSuccessIsSilentForAPassingEval(t *testing.T) {
 	m.EXPECT().Helper().Maybe()
 	// No Errorf expectation — if RequireSuccess calls it, mockery fails the test.
 
-	llmevaltest.RequireSuccess(m, llmeval.EvalResult{Pass: true})
+	llmevaltest.RequireSuccess(m, llmeval.EvalResult[string]{Pass: true})
 }
 
 func TestRequireSuccessReportsOneErrorPerFailedAssertion(t *testing.T) {
 	r := captureErrorfMessages(t)
 
-	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
 		Name: "demo",
 		Pass: false,
 		Assertions: []llmeval.AssertionRate{
@@ -106,7 +106,7 @@ func TestRequireSuccessReportsOneErrorPerFailedAssertion(t *testing.T) {
 func TestRequireSuccessReportsOneErrorPerFailedCriterion(t *testing.T) {
 	r := captureErrorfMessages(t)
 
-	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
 		Name: "demo",
 		Pass: false,
 		Criteria: []llmeval.CriterionRate{
@@ -122,7 +122,7 @@ func TestRequireSuccessReportsOneErrorPerFailedCriterion(t *testing.T) {
 func TestRequireSuccessReportsAssertionsAndCriteriaTogether(t *testing.T) {
 	r := captureErrorfMessages(t)
 
-	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
 		Name: "mixed",
 		Pass: false,
 		Assertions: []llmeval.AssertionRate{
@@ -141,13 +141,13 @@ func TestRequireSuccessReportsAssertionsAndCriteriaTogether(t *testing.T) {
 func TestFailedAssertionMessageIncludesPerFailedRunDetail(t *testing.T) {
 	r := captureErrorfMessages(t)
 
-	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
 		Name: "demo",
 		Pass: false,
 		Assertions: []llmeval.AssertionRate{
 			{Name: "equals positive", Passed: 1, Total: 3, MinRate: 1.0, Pass: false},
 		},
-		Runs: []llmeval.RunResult{
+		Runs: []llmeval.RunResult[string]{
 			{Output: "positive", Assertions: []llmeval.AssertionResult{{Pass: true}}},
 			{Output: "neutral", Assertions: []llmeval.AssertionResult{{Pass: false, Reason: `got "neutral"`}}},
 			{Output: "blue", Assertions: []llmeval.AssertionResult{{Pass: false, Reason: `got "blue"`}}},
@@ -168,13 +168,13 @@ func TestFailedAssertionMessageIncludesPerFailedRunDetail(t *testing.T) {
 func TestFailedCriterionMessageIncludesTheJudgesReason(t *testing.T) {
 	r := captureErrorfMessages(t)
 
-	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
 		Name: "demo",
 		Pass: false,
 		Criteria: []llmeval.CriterionRate{
 			{Description: "mentions TLS", Passed: 1, Total: 2, MinRate: 1.0, Pass: false},
 		},
-		Runs: []llmeval.RunResult{
+		Runs: []llmeval.RunResult[string]{
 			{Output: "summary about TLS handshake", Criteria: []llmeval.CriterionResult{{Pass: true}}},
 			{Output: "summary about encryption",
 				Criteria: []llmeval.CriterionResult{{Pass: false, Reason: "summary discusses encryption but never names TLS"}}},
@@ -193,13 +193,13 @@ func TestLongSUTOutputIsTruncatedInFailureMessages(t *testing.T) {
 	long := strings.Repeat("x", 500)
 	r := captureErrorfMessages(t)
 
-	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
 		Name: "demo",
 		Pass: false,
 		Assertions: []llmeval.AssertionRate{
 			{Name: "a", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
 		},
-		Runs: []llmeval.RunResult{
+		Runs: []llmeval.RunResult[string]{
 			{Output: long, Assertions: []llmeval.AssertionResult{{Pass: false, Reason: "nope"}}},
 		},
 	})
@@ -216,13 +216,13 @@ func TestErroredRunsAreNotReportedAsAssertionFailures(t *testing.T) {
 	// failure to it would be misleading.
 	r := captureErrorfMessages(t)
 
-	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
 		Name: "demo",
 		Pass: false,
 		Assertions: []llmeval.AssertionRate{
 			{Name: "a", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
 		},
-		Runs: []llmeval.RunResult{
+		Runs: []llmeval.RunResult[string]{
 			{Err: errors.New("SUT exploded")},
 			{Output: "x", Assertions: []llmeval.AssertionResult{{Pass: false, Reason: "wrong"}}},
 		},
@@ -237,13 +237,13 @@ func TestErroredRunsAreNotReportedAsAssertionFailures(t *testing.T) {
 func TestErroredRunsAreNotReportedAsCriterionFailures(t *testing.T) {
 	r := captureErrorfMessages(t)
 
-	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
 		Name: "demo",
 		Pass: false,
 		Criteria: []llmeval.CriterionRate{
 			{Description: "c", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
 		},
-		Runs: []llmeval.RunResult{
+		Runs: []llmeval.RunResult[string]{
 			{Err: errors.New("SUT exploded")},
 			{Output: "x", Criteria: []llmeval.CriterionResult{{Pass: false, Reason: "judge says no"}}},
 		},
@@ -260,7 +260,7 @@ func TestErroredRunsAreNotReportedAsCriterionFailures(t *testing.T) {
 func TestRequireSuccessReportsOneErrorPerFailedPostCheck(t *testing.T) {
 	r := captureErrorfMessages(t)
 
-	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
 		Name: "demo",
 		Pass: false,
 		PostChecks: []llmeval.PostCheckResult{
@@ -279,13 +279,13 @@ func TestRequireSuccessReportsOneErrorPerFailedPostCheck(t *testing.T) {
 func TestRequireSuccessAutoLogsPrintTextOnFailure(t *testing.T) {
 	r := captureErrorfMessages(t)
 
-	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
 		Name: "demo",
 		Pass: false,
 		Assertions: []llmeval.AssertionRate{
 			{Name: "a", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
 		},
-		Runs: []llmeval.RunResult{
+		Runs: []llmeval.RunResult[string]{
 			{Output: "x", Assertions: []llmeval.AssertionResult{{Pass: false, Reason: "nope"}}},
 		},
 	})
@@ -300,12 +300,12 @@ func TestWithReporterReplacesTheDefaultReporter(t *testing.T) {
 	r := captureErrorfMessages(t)
 	called := false
 
-	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
 		Pass: false,
 		Assertions: []llmeval.AssertionRate{
 			{Name: "a", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
 		},
-	}, llmevaltest.WithReporter(func(w io.Writer, _ llmeval.EvalResult) error {
+	}, llmevaltest.WithReporter[string](func(w io.Writer, _ llmeval.EvalResult[string]) error {
 		called = true
 		_, err := w.Write([]byte("custom report"))
 		return err
@@ -319,12 +319,12 @@ func TestWithReporterReplacesTheDefaultReporter(t *testing.T) {
 func TestWithReporterNilSilencesTheAutoLog(t *testing.T) {
 	r := captureErrorfMessages(t)
 
-	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
 		Pass: false,
 		Assertions: []llmeval.AssertionRate{
 			{Name: "a", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
 		},
-	}, llmevaltest.WithReporter(nil))
+	}, llmevaltest.WithReporter[string](nil))
 
 	assert.Empty(t, r.logs, "WithReporter(nil) should suppress the auto-log")
 	// Failure messages still fire — silencing is about the report, not the
@@ -337,13 +337,13 @@ func TestWithReporterNilSilencesTheAutoLog(t *testing.T) {
 func TestAnEmptyAssertionReasonOmitsTheDashSeparator(t *testing.T) {
 	r := captureErrorfMessages(t)
 
-	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
 		Name: "demo",
 		Pass: false,
 		Assertions: []llmeval.AssertionRate{
 			{Name: "a", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
 		},
-		Runs: []llmeval.RunResult{
+		Runs: []llmeval.RunResult[string]{
 			{Output: "x", Assertions: []llmeval.AssertionResult{{Pass: false, Reason: ""}}},
 		},
 	})
@@ -356,13 +356,13 @@ func TestAnEmptyAssertionReasonOmitsTheDashSeparator(t *testing.T) {
 func TestAnEmptyCriterionReasonOmitsTheJudgePrefix(t *testing.T) {
 	r := captureErrorfMessages(t)
 
-	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult{
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
 		Name: "demo",
 		Pass: false,
 		Criteria: []llmeval.CriterionRate{
 			{Description: "c", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
 		},
-		Runs: []llmeval.RunResult{
+		Runs: []llmeval.RunResult[string]{
 			{Output: "x", Criteria: []llmeval.CriterionResult{{Pass: false, Reason: ""}}},
 		},
 	})
@@ -370,4 +370,62 @@ func TestAnEmptyCriterionReasonOmitsTheJudgePrefix(t *testing.T) {
 	require.Len(t, r.messages, 1)
 	assert.Contains(t, r.messages[0], `run 1: "x"`)
 	assert.NotContains(t, r.messages[0], "judge:")
+}
+
+func TestFailedAssertionDetailsRenderStructOutputAsJSON(t *testing.T) {
+	// Exercises outputString's non-string branch: when T is a struct, the
+	// per-run failure detail in t.Errorf shows the JSON encoding of the
+	// output rather than panicking or printing %!s(struct).
+	type response struct {
+		Category string `json:"category"`
+	}
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[response]{
+		Name: "demo",
+		Pass: false,
+		Assertions: []llmeval.AssertionRate{
+			{Name: "always fail", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
+		},
+		Runs: []llmeval.RunResult[response]{
+			{
+				Output: response{Category: "positive"},
+				Assertions: []llmeval.AssertionResult{
+					{Pass: false, Reason: "nope"},
+				},
+			},
+		},
+	})
+
+	require.Len(t, r.messages, 1)
+	assert.Contains(t, r.messages[0], `{\"category\":\"positive\"}`)
+}
+
+func TestFailedAssertionDetailsFallBackToGoFormatWhenOutputIsNotJSONEncodable(t *testing.T) {
+	// json.Marshal fails on channels; outputString then falls back to %+v
+	// so adopters still see *something* in the failure message rather than
+	// an empty quoted string.
+	type unencodable struct {
+		Chan chan int
+	}
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[unencodable]{
+		Name: "demo",
+		Pass: false,
+		Assertions: []llmeval.AssertionRate{
+			{Name: "always fail", Passed: 0, Total: 1, MinRate: 1.0, Pass: false},
+		},
+		Runs: []llmeval.RunResult[unencodable]{
+			{
+				Output: unencodable{Chan: make(chan int)},
+				Assertions: []llmeval.AssertionResult{
+					{Pass: false, Reason: "nope"},
+				},
+			},
+		},
+	})
+
+	require.Len(t, r.messages, 1)
+	assert.Contains(t, r.messages[0], "Chan:")
 }

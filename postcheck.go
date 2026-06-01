@@ -3,9 +3,13 @@ package llmeval
 import "fmt"
 
 // PostCheck fires once after all runs complete and has access to the
-// fully aggregated EvalResult. Use it for budget assertions and other
-// policy checks that only make sense after the whole eval is done — see
-// MaxCost for the canonical example.
+// aggregated EvalSummary (the non-generic view of EvalResult, excluding
+// per-Run typed outputs). Use it for budget assertions and other policy
+// checks that only make sense after the whole eval is done — see MaxCost
+// for the canonical example.
+//
+// PostCheck is intentionally non-generic so it composes cleanly into any
+// Eval[T] without needing inference of T at every call site.
 //
 // Check returns (pass, reason). Reason is surfaced on PostCheckResult
 // and in PrintText / PrintJSON; keep it short and concrete (numbers,
@@ -13,7 +17,7 @@ import "fmt"
 // alone.
 type PostCheck struct {
 	Name  string
-	Check func(EvalResult) (pass bool, reason string)
+	Check func(EvalSummary) (pass bool, reason string)
 }
 
 // PostCheckResult is one PostCheck's outcome, recorded on EvalResult.
@@ -44,8 +48,8 @@ type PostCheckResult struct {
 func MaxCost(limit float64, pricers ...Pricer) PostCheck {
 	return PostCheck{
 		Name: fmt.Sprintf("max cost: $%.2f", limit),
-		Check: func(r EvalResult) (bool, string) {
-			spent, unpriced := costBreakdown(r.Usage, pricers)
+		Check: func(s EvalSummary) (bool, string) {
+			spent, unpriced := costBreakdown(s.Usage, pricers)
 			if unpriced > 0 {
 				return false, fmt.Sprintf(
 					"%d usage record(s) had no matching pricer — can't certify budget",
@@ -71,9 +75,9 @@ func MaxCost(limit float64, pricers ...Pricer) PostCheck {
 func MaxTokens(limit int) PostCheck {
 	return PostCheck{
 		Name: fmt.Sprintf("max tokens: %d", limit),
-		Check: func(r EvalResult) (bool, string) {
+		Check: func(s EvalSummary) (bool, string) {
 			used := 0
-			for _, u := range r.Usage {
+			for _, u := range s.Usage {
 				used += u.InputTokens + u.OutputTokens
 			}
 			if used > limit {

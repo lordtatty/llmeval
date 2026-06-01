@@ -18,14 +18,18 @@ import (
 // apply to its output, and how many times to repeat. The runner invokes Run
 // `Repeat` times, applies every Assert to each output, and aggregates the
 // pass rate per assertion.
-type Eval struct {
+//
+// T is the type your SUT returns. For most LLM applications T is string;
+// for structured outputs (JSON-mode classifiers, extractors, multi-field
+// responses) T is your struct.
+type Eval[T any] struct {
 	// Name identifies the eval in reports. Optional; RunTest defaults to
 	// t.Name() when this is empty.
 	Name string
 
 	// Run is the SUT closure — invoke your LLM (or LLM-driven function) and
-	// return its output as text plus any error. Called Repeat times.
-	Run func(ctx context.Context) (string, error)
+	// return its output as T plus any error. Called Repeat times.
+	Run func(ctx context.Context) (T, error)
 
 	// Repeat is how many times to invoke Run. Defaults to 1. Use 5+ to surface
 	// LLM non-determinism.
@@ -34,16 +38,23 @@ type Eval struct {
 	// Assertions holds the predicates evaluated against each Run output. They
 	// are pure (no LLM calls). Wrap any assertion with AtLeast to allow some
 	// failures across Repeat runs; otherwise it must hold every time.
-	Assertions []Assertion
+	Assertions []Assertion[T]
 
 	// Judge, if non-nil, is called once per Run after assertions to evaluate
-	// the SUT output against Criteria. Set Judge AND Criteria together, or
-	// leave both unset.
+	// the SUT output against Criteria. The judge sees the output as a string —
+	// the framework serializes T via Serializer (or its default — string
+	// passes through, anything else goes through json.Marshal). Set Judge
+	// AND Criteria together, or leave both unset.
 	Judge Judge
 
 	// Criteria are the rubric items the Judge evaluates per Run. The judge
 	// receives the full list in one call and returns one verdict per criterion.
 	Criteria []Criterion
+
+	// Serializer converts T to the string the judge sees and reports display.
+	// Optional — when nil the framework uses a default that returns string
+	// values as-is and json.Marshal's anything else.
+	Serializer func(T) (string, error)
 
 	// Timeout, if non-zero, caps each individual Run via context.WithTimeout.
 	// The timeout covers the whole runOnce: SUT call + assertions + judge
@@ -59,22 +70,23 @@ type Eval struct {
 	Concurrency int
 
 	// PostChecks fire once after all runs and judges complete, with access
-	// to the fully aggregated EvalResult. Use for budget assertions (see
-	// MaxCost) and other policy checks that operate on the eval as a whole.
-	// A failed PostCheck marks EvalResult.Pass false.
+	// to the fully aggregated EvalSummary (everything except per-Run
+	// typed outputs). Use for budget assertions (see MaxCost) and other
+	// policy checks that operate on the eval as a whole. A failed
+	// PostCheck marks EvalResult.Pass false.
 	PostChecks []PostCheck
 }
 
 // Assertion is a single check against the SUT output. The runner calls Check
 // once per Run, accumulates Pass/Total counts across all repeats, and decides
 // whether the assertion overall passes by comparing the rate to MinPassRate.
-type Assertion interface {
+type Assertion[T any] interface {
 	// Name is a short label for the assertion, used in reports.
 	Name() string
 
 	// Check runs the predicate against one SUT output. ctx is the same
 	// context passed to Eval.Run.
-	Check(ctx context.Context, output string) AssertionResult
+	Check(ctx context.Context, output T) AssertionResult
 
 	// MinPassRate is the fraction of Repeat runs in which Check must return
 	// Pass=true for this assertion to pass overall. Built-in helpers return
@@ -92,13 +104,13 @@ type AssertionResult struct {
 }
 
 // EvalResult is the aggregate outcome of one Eval execution (all repeats).
-type EvalResult struct {
+type EvalResult[T any] struct {
 	// Name is the eval's name (or t.Name() under RunTest).
 	Name string `json:"name,omitempty"`
 
 	// Runs holds one RunResult per repeat, in execution order. Failed Runs
 	// (Err != nil) appear here too but don't contribute to assertion rates.
-	Runs []RunResult `json:"runs,omitempty"`
+	Runs []RunResult[T] `json:"runs,omitempty"`
 
 	// Assertions aggregates each assertion across all Runs. Nil when no
 	// assertions were defined.
@@ -120,6 +132,33 @@ type EvalResult struct {
 
 	// PostChecks holds the outcome of each Eval.PostCheck, in the order
 	// they were declared. Empty when the eval defined no PostChecks.
+	PostChecks []PostCheckResult `json:"postChecks,omitempty"`
+}
+
+// Summary returns the non-T-dependent view of this result. PostChecks
+// receive this view, which lets PostCheck stay non-generic — Go's
+// inference doesn't propagate slice-element types back into generic
+// function calls, so a generic PostCheck[T] would force every adopter
+// to write `MaxCost[T](...)` explicitly.
+func (r EvalResult[T]) Summary() EvalSummary {
+	return EvalSummary{
+		Name:       r.Name,
+		Pass:       r.Pass,
+		Assertions: r.Assertions,
+		Criteria:   r.Criteria,
+		Usage:      r.Usage,
+		PostChecks: r.PostChecks,
+	}
+}
+
+// EvalSummary is the non-generic view of an EvalResult that PostChecks
+// receive. Excludes Runs (which is T-typed). Created by EvalResult.Summary.
+type EvalSummary struct {
+	Name       string            `json:"name,omitempty"`
+	Pass       bool              `json:"pass"`
+	Assertions []AssertionRate   `json:"assertions,omitempty"`
+	Criteria   []CriterionRate   `json:"criteria,omitempty"`
+	Usage      []Usage           `json:"usage,omitempty"`
 	PostChecks []PostCheckResult `json:"postChecks,omitempty"`
 }
 
@@ -167,9 +206,9 @@ type AssertionRate struct {
 }
 
 // RunResult is the outcome of a single Run (one repeat).
-type RunResult struct {
-	// Output is what Eval.Run returned. Empty if Err != nil.
-	Output string `json:"output,omitempty"`
+type RunResult[T any] struct {
+	// Output is what Eval.Run returned. Zero value of T if Err != nil.
+	Output T `json:"output,omitempty"`
 
 	// Assertions holds the per-assertion outcome for this Run, in the same
 	// order as Eval.Assertions. Empty when Err != nil (assertions are skipped).
@@ -197,13 +236,13 @@ type RunResult struct {
 // MarshalJSON renders RunResult with err as a string (or omitted when nil)
 // and duration in milliseconds — both more usable shapes for JSON than
 // Go's defaults (error → empty struct, duration → nanoseconds).
-func (r RunResult) MarshalJSON() ([]byte, error) {
+func (r RunResult[T]) MarshalJSON() ([]byte, error) {
 	var errStr string
 	if r.Err != nil {
 		errStr = r.Err.Error()
 	}
 	return json.Marshal(struct {
-		Output     string            `json:"output,omitempty"`
+		Output     T                 `json:"output,omitempty"`
 		Assertions []AssertionResult `json:"assertions,omitempty"`
 		Criteria   []CriterionResult `json:"criteria,omitempty"`
 		Pass       bool              `json:"pass"`
@@ -219,6 +258,28 @@ func (r RunResult) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// defaultSerialize converts v to a string. For T = string it returns the
+// value as-is; otherwise it json.Marshal's the value. Used internally to
+// bridge the typed Eval[T] surface to string-based reporters and Judge.
+func defaultSerialize[T any](v T) (string, error) {
+	if s, ok := any(v).(string); ok {
+		return s, nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// serializerOf returns eval.Serializer if non-nil, otherwise the default.
+func serializerOf[T any](eval Eval[T]) func(T) (string, error) {
+	if eval.Serializer != nil {
+		return eval.Serializer
+	}
+	return defaultSerialize[T]
+}
+
 // Run executes eval and returns the aggregated result. It invokes eval.Run
 // `Repeat` times (or once if Repeat < 1) with up to `Concurrency` invocations
 // in flight (or sequentially if Concurrency < 2), applies every assertion to
@@ -232,10 +293,10 @@ func (r RunResult) MarshalJSON() ([]byte, error) {
 //
 // Run does not depend on the testing package. For `go test` integration use
 // llmevaltest.Run, which wraps Run and reports failures via *testing.T.
-func Run(ctx context.Context, eval Eval) EvalResult {
+func Run[T any](ctx context.Context, eval Eval[T]) EvalResult[T] {
 	repeat := max(eval.Repeat, 1)
 	concurrency := max(eval.Concurrency, 1)
-	result := EvalResult{Name: eval.Name}
+	result := EvalResult[T]{Name: eval.Name}
 	assTallies := newCheckTallies(len(eval.Assertions))
 	critTallies := newCheckTallies(len(eval.Criteria))
 
@@ -290,9 +351,9 @@ func Run(ctx context.Context, eval Eval) EvalResult {
 // records the outcomes. A failed PostCheck marks result.Pass false.
 // Separated from Run because PostChecks are a distinct phase (operating
 // on the whole aggregate), not a substep of any single Run.
-func applyPostChecks(result *EvalResult, checks []PostCheck) {
+func applyPostChecks[T any](result *EvalResult[T], checks []PostCheck) {
 	for _, pc := range checks {
-		pass, reason := pc.Check(*result)
+		pass, reason := pc.Check(result.Summary())
 		result.PostChecks = append(result.PostChecks, PostCheckResult{
 			Name: pc.Name, Pass: pass, Reason: reason,
 		})
@@ -307,8 +368,8 @@ func applyPostChecks(result *EvalResult, checks []PostCheck) {
 // runs[idx] slot and sets ran[idx] true on completion; slots whose goroutine
 // short-circuited (ctx cancelled) stay zero-valued and ran[idx] false, so
 // the caller can distinguish "didn't run" from "ran and returned empty".
-func runAll(ctx context.Context, eval Eval, repeat, concurrency int) ([]RunResult, []bool) {
-	runs := make([]RunResult, repeat)
+func runAll[T any](ctx context.Context, eval Eval[T], repeat, concurrency int) ([]RunResult[T], []bool) {
+	runs := make([]RunResult[T], repeat)
 	ran := make([]bool, repeat)
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
@@ -379,7 +440,7 @@ func effectiveMinRate(min float64) float64 {
 // runOnce runs eval.Run once, applies the assertions if it succeeded, and
 // returns the RunResult. A panic in eval.Run is recovered and surfaced as
 // RunResult.Err so a misbehaving SUT can't take down the whole test process.
-func runOnce(ctx context.Context, eval Eval) (rr RunResult) {
+func runOnce[T any](ctx context.Context, eval Eval[T]) (rr RunResult[T]) {
 	runCtx := ctx
 	if eval.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -396,7 +457,7 @@ func runOnce(ctx context.Context, eval Eval) (rr RunResult) {
 	}()
 
 	output, err := eval.Run(runCtx)
-	rr = RunResult{
+	rr = RunResult[T]{
 		Output:   output,
 		Err:      err,
 		Duration: time.Since(start),
@@ -408,7 +469,7 @@ func runOnce(ctx context.Context, eval Eval) (rr RunResult) {
 	rr.Pass = allPassed(applyAssertions(runCtx, eval.Assertions, output, &rr))
 
 	if eval.Judge != nil && len(eval.Criteria) > 0 {
-		rr.Criteria = applyJudge(runCtx, eval.Judge, eval.Criteria, output)
+		rr.Criteria = applyJudge(runCtx, eval.Judge, eval.Criteria, output, serializerOf(eval))
 		if !allCriteriaPassed(rr.Criteria) {
 			rr.Pass = false
 		}
@@ -419,7 +480,7 @@ func runOnce(ctx context.Context, eval Eval) (rr RunResult) {
 // applyAssertions runs every assertion against output, appends results to
 // rr.Assertions, and returns the per-assertion pass slice for aggregation
 // in allPassed.
-func applyAssertions(ctx context.Context, asns []Assertion, output string, rr *RunResult) []bool {
+func applyAssertions[T any](ctx context.Context, asns []Assertion[T], output T, rr *RunResult[T]) []bool {
 	results := make([]bool, len(asns))
 	for i, a := range asns {
 		ar := a.Check(ctx, output)
@@ -447,11 +508,16 @@ func allCriteriaPassed(verdicts []CriterionResult) bool {
 	return true
 }
 
-// applyJudge calls the Judge and normalises its response: a returned error,
-// or a verdict count that doesn't match the criteria list, are both surfaced
-// as a uniform Fail across every criterion with an explanatory Reason.
-func applyJudge(ctx context.Context, judge Judge, criteria []Criterion, output string) []CriterionResult {
-	verdicts, err := judge.Evaluate(ctx, output, criteria)
+// applyJudge serializes the typed output via ser, calls the Judge, and
+// normalises its response: a returned error, a serializer error, or a
+// verdict count that doesn't match the criteria list are all surfaced as
+// a uniform Fail across every criterion with an explanatory Reason.
+func applyJudge[T any](ctx context.Context, judge Judge, criteria []Criterion, output T, ser func(T) (string, error)) []CriterionResult {
+	outputStr, err := ser(output)
+	if err != nil {
+		return judgeErrorVerdicts(criteria, fmt.Sprintf("serializer error: %v", err))
+	}
+	verdicts, err := judge.Evaluate(ctx, outputStr, criteria)
 	if err != nil {
 		return judgeErrorVerdicts(criteria, fmt.Sprintf("judge error: %v", err))
 	}

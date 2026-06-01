@@ -228,7 +228,7 @@ func TestJudgeReturnsParsedVerdictsToTheEvalRunner(t *testing.T) {
 
 	judge := anthropic.NewDefaultJudge(clientPointingAt(t, fake))
 
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Run:   func(context.Context) (string, error) { return "the output", nil },
 		Judge: judge,
 		Criteria: []llmeval.Criterion{

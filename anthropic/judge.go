@@ -24,7 +24,7 @@
 //	    client := anthropicsdk.NewClient(option.WithAPIKey(os.Getenv("ANTHROPIC_API_KEY")))
 //	    judge := anthropic.NewDefaultJudge(&client)
 //
-//	    llmevaltest.Run(t, llmeval.Eval{
+//	    llmevaltest.Run(t, llmeval.Eval[string]{
 //	        Run:      myLLMCall,
 //	        Judge:    judge,
 //	        Criteria: []llmeval.Criterion{{Description: "is concise"}},

@@ -24,7 +24,7 @@
 //	    client := openaisdk.NewClient(option.WithAPIKey(os.Getenv("OPENAI_API_KEY")))
 //	    judge := openai.NewDefaultJudge(&client)
 //
-//	    llmevaltest.Run(t, llmeval.Eval{
+//	    llmevaltest.Run(t, llmeval.Eval[string]{
 //	        Run:      myLLMCall,
 //	        Judge:    judge,
 //	        Criteria: []llmeval.Criterion{{Description: "is concise"}},

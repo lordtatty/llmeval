@@ -23,13 +23,13 @@ import (
 )
 
 func TestSentimentClassifier(t *testing.T) {
-    llmevaltest.Run(t, llmeval.Eval{
+    llmevaltest.Run(t, llmeval.Eval[string]{
         Run: func(ctx context.Context) (string, error) {
             // Replace this with your own LLM call.
             return yourLLMClient.Classify(ctx, "I love this product!")
         },
         Repeat: 5, // surface LLM non-determinism
-        Assertions: []llmeval.Assertion{
+        Assertions: []llmeval.Assertion[string]{
             llmeval.AtLeast(0.8, llmeval.Equal("positive")), // ≥80% must label correctly
         },
     })
@@ -205,7 +205,7 @@ var endsWithPeriod = regexp.MustCompile(`\.$`)
 func TestSummariser(t *testing.T) {
     client := anthropicsdk.NewClient(option.WithAPIKey(os.Getenv("ANTHROPIC_API_KEY")))
 
-    llmevaltest.Run(t, llmeval.Eval{
+    llmevaltest.Run(t, llmeval.Eval[string]{
         Run: func(ctx context.Context) (string, error) {
             resp, err := client.Messages.New(ctx, anthropicsdk.MessageNewParams{
                 Model: anthropicsdk.ModelClaudeHaiku4_5, MaxTokens: 100,
@@ -231,8 +231,8 @@ func TestSummariser(t *testing.T) {
         Repeat: 5, // surface LLM non-determinism
 
         // Deterministic format checks.
-        Assertions: []llmeval.Assertion{
-            llmeval.Matches(endsWithPeriod),
+        Assertions: []llmeval.Assertion[string]{
+            llmeval.MatchesString(endsWithPeriod),
         },
 
         // LLM-judged rubric items. The judge call records its own usage
@@ -266,7 +266,7 @@ repeat. Wrap any assertion with `llmeval.AtLeast(rate, asn)` to make it
 mix freely inside one eval:
 
 ```go
-Assertions: []llmeval.Assertion{
+Assertions: []llmeval.Assertion[string]{
     llmeval.OneOf("positive", "negative", "neutral"), // strict format
     llmeval.AtLeast(0.8, llmeval.Equal("positive")),  // tolerant accuracy
 },
@@ -277,66 +277,47 @@ expected drift.
 
 ## Common questions
 
-**My SUT returns structured output, not a string** — `Eval.Run` returns
-`(string, error)`, so serialize once and use `llmeval.SharedDecoder[T]`
-to stack typed assertions over the same decoded value. It decodes once
-per distinct output and shares the typed result across all `Check`
-calls — one assertion per field, no JSON-unmarshal inside every
-predicate:
+**My SUT returns structured output, not a string** — `Eval` is generic
+in T, so plug your typed function in directly. The framework serializes
+T to a string for the judge automatically (string passes through, other
+types go through `json.Marshal`).
 
 ```go
-import (
-    "context"
-    "encoding/json"
-    "fmt"
-    "testing"
-
-    "github.com/lordtatty/llmeval"
-    "github.com/lordtatty/llmeval/llmevaltest"
-)
-
-type response struct {
+type Response struct {
     Category   string
     Confidence float64
 }
 
-func TestMySUT(t *testing.T) {
-    sd := &llmeval.SharedDecoder[response]{}
+func mySUT(ctx context.Context) (Response, error) { /* ... */ }
 
-    llmevaltest.Run(t, llmeval.Eval{
-        Run: func(ctx context.Context) (string, error) {
-            r, err := mySUT(ctx)
-            if err != nil {
-                return "", err
-            }
-            b, err := json.Marshal(r)
-            if err != nil {
-                return "", err
-            }
-            return string(b), nil
-        },
-        Assertions: []llmeval.Assertion{
-            sd.Check("category is positive", func(r response) (bool, string) {
+func TestMySUT(t *testing.T) {
+    llmevaltest.Run(t, llmeval.Eval[Response]{
+        Run: mySUT,
+        Assertions: []llmeval.Assertion[Response]{
+            llmeval.Check("category is positive", func(r Response) (bool, string) {
                 if r.Category == "positive" {
                     return true, ""
                 }
                 return false, "got " + r.Category
             }),
-            sd.Check("confidence ≥ 0.8", func(r response) (bool, string) {
+            llmeval.Check("confidence ≥ 0.8", func(r Response) (bool, string) {
                 if r.Confidence >= 0.8 {
                     return true, ""
                 }
                 return false, fmt.Sprintf("confidence %.2f", r.Confidence)
             }),
         },
+        Judge: anthropic.NewDefaultJudge(&client),
+        Criteria: []llmeval.Criterion{
+            {Description: "reasoning matches category"},
+        },
     })
 }
 ```
 
-For a single typed assertion, `llmeval.CheckJSON("name", fn)` is the
-one-liner equivalent (it's `(&SharedDecoder[T]{}).Check` under the
-hood). The judge still sees the JSON string and can include "is
-well-formed JSON" as a criterion if you want.
+Override the serializer (e.g. for a custom JSON encoder, MessagePack,
+or proto-text) by setting `Eval.Serializer`. The judge sees whatever
+string the serializer produces.
 
 **`MaxCost` fails with "no matching pricer"** — you didn't pass a `Pricer`
 for the provider whose usage was recorded. `MaxCost` is fail-closed:
@@ -499,7 +480,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestThing(t *testing.T) {
-    runEval(t, llmeval.Eval{ /* ... */ })
+    runEval(t, llmeval.Eval[string]{ /* ... */ })
 }
 ```
 
@@ -509,10 +490,9 @@ Each test calls `runEval` instead of `llmevaltest.Run` directly. The
 ## What works today
 
 - `llmeval.Eval` — one declarative eval per `Test*` function
-- `llmeval.Equal`, `OneOf`, `Contains`, `NotContains`, `Matches` — built-in assertion helpers
+- `llmeval.Equal[T]`, `OneOf[T]` (any comparable T), `ContainsString`, `NotContainsString`, `MatchesString` — built-in assertion helpers
 - `llmeval.Check(name, fn)` — adapter for any custom predicate (testify, go-cmp, etc.)
-- `llmeval.CheckJSON[T](name, fn)` — like `Check` but the predicate sees the SUT output already decoded into `T`
-- `llmeval.SharedDecoder[T]` — multi-field structured-output helper: `sd.Check(...)` returns Assertions that share a single decode per distinct output, so N field-level checks decode N times less
+- `llmeval.Eval[T]` is generic in the SUT output type — `Eval[string]` for plain LLM text, `Eval[MyStruct]` for JSON-mode structured output. The framework serializes T to a string for the judge automatically (string passes through, anything else goes through `json.Marshal`); override via `Eval.Serializer` for custom formats
 - `llmeval.AtLeast(rate, asn)` — tolerance wrapper for multi-run evals
 - `llmeval.Judge` / `Criterion` / `PromptedJudge` — batched LLM-as-judge: one LLM call per Run, N criteria, N verdicts back
 - Pluggable response format: default `PrefixVerdictParser` (PASS/FAIL prefix) or `JSONVerdictParser` + `JSONPromptTemplate` (for structured-output-capable LLMs)

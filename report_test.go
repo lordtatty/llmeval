@@ -17,11 +17,11 @@ import (
 // criterion paths, one passing run, one failing run, and one errored run.
 // Used as the input for several report tests so the output shape is
 // specified once.
-func sampleResult() llmeval.EvalResult {
-	return llmeval.EvalResult{
+func sampleResult() llmeval.EvalResult[string] {
+	return llmeval.EvalResult[string]{
 		Name: "sentiment classifier",
 		Pass: false,
-		Runs: []llmeval.RunResult{
+		Runs: []llmeval.RunResult[string]{
 			{
 				Output:   "positive",
 				Pass:     true,
@@ -127,11 +127,56 @@ func TestPrintTextOmitsCriterionRatesWhenAbsent(t *testing.T) {
 	assert.NotContains(t, buf.String(), "Criterion rates")
 }
 
+func TestPrintTextFallsBackToGoFormatWhenOutputCannotMarshalToJSON(t *testing.T) {
+	// json.Marshal fails on channels — formatOutput's final %+v branch
+	// covers this so adopters still see something useful in the report.
+	type unencodable struct {
+		Chan chan int
+	}
+	r := llmeval.EvalResult[unencodable]{
+		Name: "demo",
+		Pass: true,
+		Runs: []llmeval.RunResult[unencodable]{{
+			Output:   unencodable{Chan: make(chan int)},
+			Pass:     true,
+			Duration: time.Millisecond,
+		}},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, llmeval.PrintText(&buf, r))
+
+	// %+v on an unencodable struct includes the channel address, which is
+	// enough to confirm the fallback ran; the exact format is Go-specific.
+	assert.Contains(t, buf.String(), "Chan:")
+}
+
+func TestPrintTextRendersStructOutputAsJSON(t *testing.T) {
+	// Exercises formatOutput's non-string branch via Eval[struct].
+	type response struct {
+		Category string `json:"category"`
+	}
+	r := llmeval.EvalResult[response]{
+		Name: "demo",
+		Pass: true,
+		Runs: []llmeval.RunResult[response]{{
+			Output:   response{Category: "positive"},
+			Pass:     true,
+			Duration: 100 * time.Millisecond,
+		}},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, llmeval.PrintText(&buf, r))
+
+	assert.Contains(t, buf.String(), `"category":"positive"`)
+}
+
 func TestPrintTextRendersAPassingResultCleanly(t *testing.T) {
-	r := llmeval.EvalResult{
+	r := llmeval.EvalResult[string]{
 		Name: "happy path",
 		Pass: true,
-		Runs: []llmeval.RunResult{{Output: "hello", Pass: true, Duration: 100 * time.Millisecond,
+		Runs: []llmeval.RunResult[string]{{Output: "hello", Pass: true, Duration: 100 * time.Millisecond,
 			Assertions: []llmeval.AssertionResult{{Pass: true}}}},
 		Assertions: []llmeval.AssertionRate{{Name: "equal: \"hello\"", Passed: 1, Total: 1, MinRate: 1.0, Pass: true}},
 	}
@@ -226,7 +271,7 @@ func TestPrintTextRendersUnnamedEvalsAsPlaceholderAndOmitsRateSections(t *testin
 	//   - the empty-Runs branch (the per-run loop has zero iterations),
 	//   - both "omit the rates section" branches at the bottom.
 	var buf bytes.Buffer
-	require.NoError(t, llmeval.PrintText(&buf, llmeval.EvalResult{Pass: true}))
+	require.NoError(t, llmeval.PrintText(&buf, llmeval.EvalResult[string]{Pass: true}))
 
 	s := buf.String()
 	assert.Contains(t, s, "(unnamed)")
@@ -238,10 +283,10 @@ func TestPrintTextOmitsTheAssertionsSectionWhenARunHasNone(t *testing.T) {
 	// A non-erroring run with zero assertions and zero criteria — exercises
 	// the "skip both inner sections" branches of writeRun.
 	var buf bytes.Buffer
-	require.NoError(t, llmeval.PrintText(&buf, llmeval.EvalResult{
+	require.NoError(t, llmeval.PrintText(&buf, llmeval.EvalResult[string]{
 		Name: "assertion-less",
 		Pass: true,
-		Runs: []llmeval.RunResult{{Output: "hello", Pass: true, Duration: 5 * time.Millisecond}},
+		Runs: []llmeval.RunResult[string]{{Output: "hello", Pass: true, Duration: 5 * time.Millisecond}},
 	}))
 
 	s := buf.String()

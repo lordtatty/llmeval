@@ -10,7 +10,11 @@ import (
 // stable and suitable for log files, terminal output, and inclusion in
 // test failure messages. Returns the first write error encountered (if
 // any) from w.
-func PrintText(w io.Writer, result EvalResult) error {
+//
+// Per-Run Output values render as quoted strings for T = string and as
+// JSON for other T (falling back to Go's default %+v if json.Marshal
+// fails).
+func PrintText[T any](w io.Writer, result EvalResult[T]) error {
 	e := &errWriter{w: w}
 	e.printf("Eval: %s\nPass: %s (%d runs)\n",
 		nameOrPlaceholder(result.Name),
@@ -59,7 +63,7 @@ func PrintText(w io.Writer, result EvalResult) error {
 // EvalResult / RunResult / etc.'s struct tags — see those types for the
 // authoritative field list. Err is rendered as a string; Duration as
 // milliseconds (durationMs).
-func PrintJSON(w io.Writer, result EvalResult) error {
+func PrintJSON[T any](w io.Writer, result EvalResult[T]) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(result)
@@ -79,7 +83,7 @@ func (e *errWriter) printf(format string, args ...any) {
 	_, e.err = fmt.Fprintf(e.w, format, args...)
 }
 
-func writeRun(e *errWriter, idx int, run RunResult) {
+func writeRun[T any](e *errWriter, idx int, run RunResult[T]) {
 	e.printf("\nRun %d  [%dms]  %s\n",
 		idx, run.Duration.Milliseconds(), passLabel(run.Pass),
 	)
@@ -87,7 +91,7 @@ func writeRun(e *errWriter, idx int, run RunResult) {
 		e.printf("  Error: %s\n", run.Err)
 		return
 	}
-	e.printf("  Output: %q\n", run.Output)
+	e.printf("  Output: %s\n", formatOutput(run.Output))
 	if len(run.Assertions) > 0 {
 		e.printf("  Assertions:\n")
 		for _, a := range run.Assertions {
@@ -100,6 +104,20 @@ func writeRun(e *errWriter, idx int, run RunResult) {
 			e.printf("    %s%s\n", passLabel(c.Pass), reasonSuffix(c.Reason))
 		}
 	}
+}
+
+// formatOutput renders a typed Run output for human display. String values
+// are quoted; other T types serialise as JSON, with a final %+v fallback
+// if json.Marshal fails (e.g. a struct with unmarshallable fields).
+func formatOutput[T any](v T) string {
+	if s, ok := any(v).(string); ok {
+		return fmt.Sprintf("%q", s)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%+v", v)
+	}
+	return string(b)
 }
 
 func passLabel(pass bool) string {

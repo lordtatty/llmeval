@@ -32,10 +32,10 @@ func (c *callCounter) returning(output string) func(context.Context) (string, er
 func TestRepeatInvokesTheSUTOnceForEachRepeat(t *testing.T) {
 	counter := &callCounter{}
 
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Run:        counter.returning("x"),
 		Repeat:     5,
-		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
+		Assertions: []llmeval.Assertion[string]{llmeval.Equal("x")},
 	})
 
 	assert.Equal(t, 5, counter.calls)
@@ -47,9 +47,9 @@ func TestRepeatInvokesTheSUTOnceForEachRepeat(t *testing.T) {
 // ── SUT error / panic ───────────────────────────────────────────────────────
 
 func TestSUTErrorIsRecordedAndCausesEvalToFail(t *testing.T) {
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Run:        func(context.Context) (string, error) { return "", errors.New("boom") },
-		Assertions: []llmeval.Assertion{llmeval.Equal("anything")},
+		Assertions: []llmeval.Assertion[string]{llmeval.Equal("anything")},
 	})
 
 	assert.False(t, result.Pass, "result=%+v", result)
@@ -58,9 +58,9 @@ func TestSUTErrorIsRecordedAndCausesEvalToFail(t *testing.T) {
 }
 
 func TestSUTPanicDoesNotCrashTheTestProcessAndFailsTheEval(t *testing.T) {
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Run:        func(context.Context) (string, error) { panic("boom") },
-		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
+		Assertions: []llmeval.Assertion[string]{llmeval.Equal("x")},
 	})
 
 	assert.False(t, result.Pass, "result=%+v", result)
@@ -72,10 +72,10 @@ func TestSUTPanicDoesNotCrashTheTestProcessAndFailsTheEval(t *testing.T) {
 // ── Timeout ─────────────────────────────────────────────────────────────────
 
 func TestTimeoutDoesNotFireWhenSUTReturnsInTime(t *testing.T) {
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Run:        func(context.Context) (string, error) { return "x", nil },
 		Timeout:    time.Second,
-		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
+		Assertions: []llmeval.Assertion[string]{llmeval.Equal("x")},
 	})
 
 	assert.True(t, result.Pass, "result=%+v", result)
@@ -83,13 +83,13 @@ func TestTimeoutDoesNotFireWhenSUTReturnsInTime(t *testing.T) {
 }
 
 func TestTimeoutFiresAndIsSurfacedAsDeadlineExceeded(t *testing.T) {
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Run: func(ctx context.Context) (string, error) {
 			<-ctx.Done()
 			return "", ctx.Err()
 		},
 		Timeout:    5 * time.Millisecond,
-		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
+		Assertions: []llmeval.Assertion[string]{llmeval.Equal("x")},
 	})
 
 	assert.False(t, result.Pass, "result=%+v", result)
@@ -104,13 +104,13 @@ func TestParentCtxCancellationAbortsRemainingRepeats(t *testing.T) {
 	// though Repeat asks for 10.
 	ctx, cancel := context.WithCancel(context.Background())
 
-	result := llmeval.Run(ctx, llmeval.Eval{
+	result := llmeval.Run(ctx, llmeval.Eval[string]{
 		Run: func(context.Context) (string, error) {
 			cancel()
 			return "x", nil
 		},
 		Repeat:     10,
-		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
+		Assertions: []llmeval.Assertion[string]{llmeval.Equal("x")},
 	})
 
 	assert.Len(t, result.Runs, 1, "loop should stop after first iteration sees ctx.Err")
@@ -126,9 +126,9 @@ func TestConcurrencyRunsInParallelWhenSet(t *testing.T) {
 	started := make(chan struct{}, n)
 	release := make(chan struct{})
 
-	done := make(chan llmeval.EvalResult, 1)
+	done := make(chan llmeval.EvalResult[string], 1)
 	go func() {
-		done <- llmeval.Run(context.Background(), llmeval.Eval{
+		done <- llmeval.Run(context.Background(), llmeval.Eval[string]{
 			Repeat:      n,
 			Concurrency: n,
 			Run: func(context.Context) (string, error) {
@@ -158,7 +158,7 @@ func TestConcurrencyDoesNotExceedTheConfiguredLimit(t *testing.T) {
 	const limit = 4
 	var inFlight, peak atomic.Int32
 
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Repeat:      repeat,
 		Concurrency: limit,
 		Run: func(context.Context) (string, error) {
@@ -186,7 +186,7 @@ func TestConcurrencyProducesADistinctResultPerRepeat(t *testing.T) {
 	const n = 50
 	var id atomic.Int32
 
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Repeat:      n,
 		Concurrency: 8,
 		Run: func(context.Context) (string, error) {
@@ -204,11 +204,11 @@ func TestConcurrencyProducesADistinctResultPerRepeat(t *testing.T) {
 }
 
 func TestConcurrencyHandlesConcurrencyGreaterThanRepeat(t *testing.T) {
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Repeat:      3,
 		Concurrency: 10,
 		Run:         func(context.Context) (string, error) { return "x", nil },
-		Assertions:  []llmeval.Assertion{llmeval.Equal("x")},
+		Assertions:  []llmeval.Assertion[string]{llmeval.Equal("x")},
 	})
 
 	assert.True(t, result.Pass, "result=%+v", result)
@@ -225,7 +225,7 @@ func TestConcurrencyRespectsParentCtxCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var once sync.Once
 
-	result := llmeval.Run(ctx, llmeval.Eval{
+	result := llmeval.Run(ctx, llmeval.Eval[string]{
 		Repeat:      repeat,
 		Concurrency: concurrency,
 		Run: func(context.Context) (string, error) {
@@ -247,11 +247,11 @@ func TestConcurrencyRecoversSUTPanicsInEachGoroutine(t *testing.T) {
 	// recover. A panic in one SUT call must not take down the runner or
 	// affect any other in-flight goroutine.
 	const repeat = 8
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Repeat:      repeat,
 		Concurrency: 4,
 		Run:         func(context.Context) (string, error) { panic("boom") },
-		Assertions:  []llmeval.Assertion{llmeval.Equal("x")},
+		Assertions:  []llmeval.Assertion[string]{llmeval.Equal("x")},
 	})
 
 	require.Len(t, result.Runs, repeat)
@@ -267,7 +267,7 @@ func TestConcurrencyRecoversSUTPanicsInEachGoroutine(t *testing.T) {
 func TestRunAggregatesUsageRecordedFromInsideTheSUT(t *testing.T) {
 	// The SUT records usage via RecordUsage; Run aggregates per
 	// (provider, model) into EvalResult.Usage.
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Repeat: 3,
 		Run: func(ctx context.Context) (string, error) {
 			llmeval.RecordUsage(ctx, llmeval.Usage{
@@ -276,7 +276,7 @@ func TestRunAggregatesUsageRecordedFromInsideTheSUT(t *testing.T) {
 			})
 			return "x", nil
 		},
-		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
+		Assertions: []llmeval.Assertion[string]{llmeval.Equal("x")},
 	})
 
 	require.Len(t, result.Usage, 1)
@@ -286,9 +286,9 @@ func TestRunAggregatesUsageRecordedFromInsideTheSUT(t *testing.T) {
 }
 
 func TestRunUsageIsEmptyWhenNoLLMCallsAreRecorded(t *testing.T) {
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Run:        func(context.Context) (string, error) { return "x", nil },
-		Assertions: []llmeval.Assertion{llmeval.Equal("x")},
+		Assertions: []llmeval.Assertion[string]{llmeval.Equal("x")},
 	})
 
 	assert.Empty(t, result.Usage)
@@ -303,8 +303,8 @@ func TestRunIsolatesUsageBetweenSeparateEvalInvocations(t *testing.T) {
 		return "x", nil
 	}
 
-	first := llmeval.Run(ctx, llmeval.Eval{Run: sut, Assertions: []llmeval.Assertion{llmeval.Equal("x")}})
-	second := llmeval.Run(ctx, llmeval.Eval{Run: sut, Assertions: []llmeval.Assertion{llmeval.Equal("x")}})
+	first := llmeval.Run(ctx, llmeval.Eval[string]{Run: sut, Assertions: []llmeval.Assertion[string]{llmeval.Equal("x")}})
+	second := llmeval.Run(ctx, llmeval.Eval[string]{Run: sut, Assertions: []llmeval.Assertion[string]{llmeval.Equal("x")}})
 
 	require.Len(t, first.Usage, 1)
 	assert.Equal(t, 10, first.Usage[0].InputTokens)
@@ -315,13 +315,13 @@ func TestRunIsolatesUsageBetweenSeparateEvalInvocations(t *testing.T) {
 // ── RunResult.MarshalJSON ──────────────────────────────────────────────────
 
 func TestRunResultMarshalJSONOmitsErrFieldWhenNil(t *testing.T) {
-	data, err := json.Marshal(llmeval.RunResult{Output: "ok", Pass: true})
+	data, err := json.Marshal(llmeval.RunResult[string]{Output: "ok", Pass: true})
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), `"err"`)
 }
 
 func TestRunResultMarshalJSONRendersErrAsAString(t *testing.T) {
-	data, err := json.Marshal(llmeval.RunResult{Err: errors.New("rate limited")})
+	data, err := json.Marshal(llmeval.RunResult[string]{Err: errors.New("rate limited")})
 	require.NoError(t, err)
 
 	var decoded map[string]any
@@ -330,7 +330,7 @@ func TestRunResultMarshalJSONRendersErrAsAString(t *testing.T) {
 }
 
 func TestRunResultMarshalJSONConvertsDurationToMilliseconds(t *testing.T) {
-	data, err := json.Marshal(llmeval.RunResult{Duration: 1234 * time.Millisecond})
+	data, err := json.Marshal(llmeval.RunResult[string]{Duration: 1234 * time.Millisecond})
 	require.NoError(t, err)
 
 	var decoded map[string]any
@@ -339,7 +339,7 @@ func TestRunResultMarshalJSONConvertsDurationToMilliseconds(t *testing.T) {
 }
 
 func TestRunResultMarshalJSONPreservesAssertionsAndCriteria(t *testing.T) {
-	data, err := json.Marshal(llmeval.RunResult{
+	data, err := json.Marshal(llmeval.RunResult[string]{
 		Output:     "x",
 		Pass:       false,
 		Assertions: []llmeval.AssertionResult{{Pass: false, Reason: "nope"}},
@@ -360,6 +360,100 @@ func TestRunResultMarshalJSONPreservesAssertionsAndCriteria(t *testing.T) {
 	assert.Equal(t, "ok", decoded.Criteria[0].Reason)
 }
 
+// ── Eval[T] generic coverage ────────────────────────────────────────────────
+
+// stubJudgeAllPass returns a Pass verdict for every criterion — used to
+// drive the judge path (and therefore the serializer) in tests that need
+// the framework to call Judge.Evaluate without a real LLM.
+type stubJudgeAllPass struct{ lastOutput string }
+
+func (j *stubJudgeAllPass) Evaluate(_ context.Context, output string, criteria []llmeval.Criterion) ([]llmeval.CriterionResult, error) {
+	j.lastOutput = output
+	out := make([]llmeval.CriterionResult, len(criteria))
+	for i := range criteria {
+		out[i] = llmeval.CriterionResult{Pass: true}
+	}
+	return out, nil
+}
+
+func TestEvalSerializesStructOutputToJSONForTheJudge(t *testing.T) {
+	// Exercises defaultSerialize's json.Marshal branch + applyJudge's
+	// serializer success path: a struct T flows through Run → Judge as
+	// JSON without any user-supplied Serializer.
+	type response struct {
+		Category string `json:"category"`
+	}
+	judge := &stubJudgeAllPass{}
+	result := llmeval.Run(context.Background(), llmeval.Eval[response]{
+		Run: func(context.Context) (response, error) {
+			return response{Category: "positive"}, nil
+		},
+		Judge:    judge,
+		Criteria: []llmeval.Criterion{{Description: "any"}},
+	})
+
+	assert.True(t, result.Pass)
+	assert.JSONEq(t, `{"category":"positive"}`, judge.lastOutput)
+}
+
+func TestEvalUsesCustomSerializerWhenProvided(t *testing.T) {
+	// Exercises serializerOf's "Serializer != nil" branch. The custom
+	// serializer takes priority over the default; the judge sees its output.
+	judge := &stubJudgeAllPass{}
+	result := llmeval.Run(context.Background(), llmeval.Eval[int]{
+		Run: func(context.Context) (int, error) { return 42, nil },
+		Serializer: func(n int) (string, error) {
+			return fmt.Sprintf("the answer is %d", n), nil
+		},
+		Judge:    judge,
+		Criteria: []llmeval.Criterion{{Description: "any"}},
+	})
+
+	assert.True(t, result.Pass)
+	assert.Equal(t, "the answer is 42", judge.lastOutput)
+}
+
+func TestDefaultSerializeFallsThroughToErrorWhenJSONMarshalFails(t *testing.T) {
+	// Channels and funcs aren't JSON-marshallable. defaultSerialize then
+	// surfaces the encode error via applyJudge's serializer-error path.
+	type unencodable struct {
+		Chan chan int
+	}
+	judge := &stubJudgeAllPass{}
+	result := llmeval.Run(context.Background(), llmeval.Eval[unencodable]{
+		Run: func(context.Context) (unencodable, error) {
+			return unencodable{Chan: make(chan int)}, nil
+		},
+		Judge:    judge,
+		Criteria: []llmeval.Criterion{{Description: "any"}},
+	})
+
+	assert.False(t, result.Pass)
+	require.Len(t, result.Runs[0].Criteria, 1)
+	assert.Contains(t, result.Runs[0].Criteria[0].Reason, "serializer error")
+}
+
+func TestEvalSurfacesSerializerErrorAsAFailedCriterion(t *testing.T) {
+	// Exercises applyJudge's serializer-error branch. When the configured
+	// Serializer fails, the framework marks every criterion as failed
+	// with a "serializer error" reason rather than calling the judge.
+	judge := &stubJudgeAllPass{}
+	result := llmeval.Run(context.Background(), llmeval.Eval[int]{
+		Run: func(context.Context) (int, error) { return 1, nil },
+		Serializer: func(int) (string, error) {
+			return "", errors.New("boom")
+		},
+		Judge:    judge,
+		Criteria: []llmeval.Criterion{{Description: "any"}},
+	})
+
+	assert.False(t, result.Pass)
+	require.Len(t, result.Runs, 1)
+	require.Len(t, result.Runs[0].Criteria, 1)
+	assert.Contains(t, result.Runs[0].Criteria[0].Reason, "serializer error")
+	assert.Empty(t, judge.lastOutput, "judge should not have been called")
+}
+
 // ── ExampleRun (godoc example, runs under go test) ─────────────────────────
 
 // ExampleRun shows the most common shape of an eval: one SUT call, a strict
@@ -371,11 +465,11 @@ func ExampleRun() {
 		return "positive", nil
 	}
 
-	result := llmeval.Run(context.Background(), llmeval.Eval{
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Name:   "sentiment classifier",
 		Run:    classify,
 		Repeat: 10,
-		Assertions: []llmeval.Assertion{
+		Assertions: []llmeval.Assertion[string]{
 			llmeval.OneOf("positive", "negative", "neutral"), // strict format
 			llmeval.AtLeast(0.8, llmeval.Equal("positive")),  // tolerant accuracy
 		},
