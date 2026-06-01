@@ -69,6 +69,73 @@ func PrintJSON[T any](w io.Writer, result EvalResult[T]) error {
 	return enc.Encode(result)
 }
 
+// PrintTextFunc writes a human-readable summary of an EvalFuncResult to w.
+// Mirrors PrintText for the imperative EvalFunc path — same overall shape
+// (header, per-run details, assertion rates, usage, post-checks) but no
+// Output rendering (Run's only output is the assertion list) and no
+// Criteria section (judged criteria surface as AssertionResults via
+// JudgeAll).
+func PrintTextFunc(w io.Writer, result EvalFuncResult) error {
+	e := &errWriter{w: w}
+	e.printf("Eval: %s\nPass: %s (%d runs)\n",
+		nameOrPlaceholder(result.Name),
+		passLabel(result.Pass),
+		len(result.Runs),
+	)
+	for i, run := range result.Runs {
+		writeRunFunc(e, i, run)
+	}
+	if len(result.Assertions) > 0 {
+		e.printf("\nAssertion rates:\n")
+		for _, a := range result.Assertions {
+			e.printf("  %s  %s  %d/%d  (≥%.2f)\n",
+				passLabel(a.Pass), a.Name, a.Passed, a.Total, a.MinRate,
+			)
+		}
+	}
+	if len(result.Usage) > 0 {
+		e.printf("\nUsage:\n")
+		for _, u := range result.Usage {
+			e.printf("  %s / %s  %d in / %d out\n",
+				u.Provider, u.Model, u.InputTokens, u.OutputTokens,
+			)
+		}
+	}
+	if len(result.PostChecks) > 0 {
+		e.printf("\nPost-checks:\n")
+		for _, pc := range result.PostChecks {
+			e.printf("  %s  %s%s\n",
+				passLabel(pc.Pass), pc.Name, reasonSuffix(pc.Reason),
+			)
+		}
+	}
+	return e.err
+}
+
+// PrintJSONFunc writes an EvalFuncResult as indented JSON to w. Shape
+// matches the struct tags on EvalFuncResult / EvalFuncRunResult.
+func PrintJSONFunc(w io.Writer, result EvalFuncResult) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(result)
+}
+
+func writeRunFunc(e *errWriter, idx int, run EvalFuncRunResult) {
+	e.printf("\nRun %d  [%dms]  %s\n",
+		idx, run.Duration.Milliseconds(), passLabel(run.Pass),
+	)
+	if run.Err != nil {
+		e.printf("  Error: %s\n", run.Err)
+		return
+	}
+	if len(run.Assertions) > 0 {
+		e.printf("  Assertions:\n")
+		for _, a := range run.Assertions {
+			e.printf("    %s  %s%s\n", passLabel(a.Pass), a.Name, reasonSuffix(a.Reason))
+		}
+	}
+}
+
 // errWriter centralises "stop on first write error" so callers can write
 // many lines without checking err after every Fprintf.
 type errWriter struct {

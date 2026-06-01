@@ -94,8 +94,15 @@ type Assertion[T any] interface {
 	MinPassRate() float64
 }
 
-// AssertionResult is the outcome of a single Assertion.Check call.
+// AssertionResult is the outcome of a single Assertion.Check call (under
+// Eval[T]) or one of the AssertionResult values returned from an
+// EvalFunc.Run.
 type AssertionResult struct {
+	// Name labels the assertion when used under EvalFunc.Run, where the
+	// imperative model groups by name across repeats. Unused under
+	// Eval[T] (assertions are matched by slice index there).
+	Name string `json:"name,omitempty"`
+
 	// Pass is true if the predicate held for this output.
 	Pass bool `json:"pass"`
 

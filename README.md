@@ -55,6 +55,43 @@ go test ./...
 The build tag means eval files don't compile into normal test runs — no
 accidental LLM calls, no surprise bills.
 
+## Imperative alternative: `EvalFunc`
+
+If the declarative `Eval[T]` shape feels heavy, the same sentiment
+classifier in the imperative style:
+
+```go
+//go:build llmeval
+
+func TestSentimentClassifier(t *testing.T) {
+    llmevaltest.RunFunc(t, llmeval.EvalFunc{
+        Run: func(ctx context.Context) ([]llmeval.AssertionResult, error) {
+            label, err := yourLLMClient.Classify(ctx, "I love this product!")
+            if err != nil {
+                return nil, err
+            }
+            return []llmeval.AssertionResult{
+                {Name: "category", Pass: label == "positive"},
+            }, nil
+        },
+        Repeat:       5,
+        MinPassRates: map[string]float64{"category": 0.8}, // ≥80% must label correctly
+    })
+}
+```
+
+The `Run` closure does its own checking and returns one
+`AssertionResult` per check. The framework iterates `Repeat` times,
+aggregates by `Name`, and runs `PostChecks` — same lifecycle as
+`Eval[T]`, just with the assertions expressed inline rather than as a
+slice of `Assertion[T]`. To wire an LLM judge, call
+`llmeval.JudgeAll(ctx, judge, output, criteria)` from inside `Run` and
+append its result to the returned slice.
+
+Pick `Eval[T]` for declarative specs and assertion reuse across evals;
+pick `EvalFunc` when each eval is a one-off and inlining the checks
+reads cleaner than building an `Assertion[T]` for each one.
+
 ## How an eval flows
 
 ```
@@ -499,6 +536,7 @@ Each test calls `runEval` instead of `llmevaltest.Run` directly. The
 - `llmeval/anthropic.NewDefaultJudge` / `llmeval/openai.NewDefaultJudge` — opt-in pre-wired judges in sub-modules so the core stays SDK-free; `NewJSONJudge` ships the same shape pre-configured for JSON-mode replies
 - `llmeval/judgetest` — curated `Cases` + `AssertCase(t, judge, c)` helper for live prompt-quality tests against any `llmeval.Judge` implementation
 - `llmeval.Run` — single-eval runner (no `testing` dependency)
+- `llmeval.EvalFunc` / `llmeval.RunFunc` — imperative alternative to `Eval[T]`; the Run closure does its own checking and returns one `AssertionResult` per check, the framework iterates and aggregates by Name. Pair with `llmevaltest.RunFunc` / `llmeval.PrintTextFunc`, and use `llmeval.JudgeAll` to wire an LLM judge inline
 - `llmevaltest.Run` / `llmevaltest.RequireSuccess` — `testing.T` integration in a subpackage
 - Per-assertion + per-criterion pass-rate aggregation across `Repeat` runs
 - Per-`Eval.Timeout` via `context.WithTimeout`, panic recovery in the SUT
