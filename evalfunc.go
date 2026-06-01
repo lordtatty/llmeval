@@ -139,7 +139,7 @@ func RunFunc(ctx context.Context, eval EvalFunc) EvalFuncResult {
 	}
 
 	result.Assertions = agg.rates()
-	result.Pass = true
+	result.Pass = anyRunSucceededFunc(result.Runs)
 	for _, ar := range result.Assertions {
 		if !ar.Pass {
 			result.Pass = false
@@ -148,6 +148,18 @@ func RunFunc(ctx context.Context, eval EvalFunc) EvalFuncResult {
 	result.Usage = collector.Aggregated()
 	applyPostChecksFunc(&result, eval.PostChecks)
 	return result
+}
+
+// anyRunSucceededFunc reports whether at least one run completed without
+// error. An eval with zero successful runs has no positive evidence the
+// SUT works and must fail regardless of how few assertions were declared.
+func anyRunSucceededFunc(runs []EvalFuncRunResult) bool {
+	for _, rr := range runs {
+		if rr.Err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // applyPostChecksFunc runs each PostCheck against the result Summary.

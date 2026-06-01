@@ -138,6 +138,25 @@ func TestRunFuncRespectsMinPassRatesOverride(t *testing.T) {
 // Errors and panics
 // ─────────────────────────────────────────────────────────────────────────────
 
+func TestRunFuncMarksResultFailedWhenEveryRunErrored(t *testing.T) {
+	// Without this guard the eval has nothing to flip Pass to false on
+	// (result.Assertions stays empty because nothing was returned), and
+	// an outage where every SUT call failed would silently report as a
+	// passing eval — the exact opposite of the truth.
+	result := llmeval.RunFunc(context.Background(), llmeval.EvalFunc{
+		Run: func(context.Context) ([]llmeval.AssertionResult, error) {
+			return nil, errors.New("boom")
+		},
+		Repeat: 3,
+	})
+
+	require.Len(t, result.Runs, 3)
+	for _, rr := range result.Runs {
+		assert.Error(t, rr.Err)
+	}
+	assert.False(t, result.Pass, "an eval with no successful runs cannot pass")
+}
+
 func TestRunFuncErroredRunsAreRecordedButSkippedInAggregation(t *testing.T) {
 	i := 0
 	result := llmeval.RunFunc(context.Background(), llmeval.EvalFunc{

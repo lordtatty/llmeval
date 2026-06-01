@@ -208,6 +208,67 @@ func TestFuncAnEmptyAssertionReasonOmitsTheDashSeparator(t *testing.T) {
 	assert.NotContains(t, r.messages[0], "run 1 —")
 }
 
+// ── All-errored runs ───────────────────────────────────────────────────────
+
+func TestRequireSuccessFuncReportsAllErroredRunsAsAFrameworkFailure(t *testing.T) {
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccessFunc(r.T, llmeval.EvalFuncResult{
+		Name: "demo",
+		Pass: false,
+		Runs: []llmeval.EvalFuncRunResult{
+			{Err: errors.New("rate limited")},
+			{Err: errors.New("connection refused")},
+		},
+	})
+
+	require.Len(t, r.messages, 1)
+	assert.Contains(t, r.messages[0], `eval "demo"`)
+	assert.Contains(t, r.messages[0], "2/2 errored")
+	assert.Contains(t, r.messages[0], "rate limited")
+	assert.Contains(t, r.messages[0], "connection refused")
+}
+
+func TestRequireSuccessFuncSkipsNoisyAssertionMessagesWhenNoRunSucceeded(t *testing.T) {
+	// MinPassRates entries don't produce AssertionRate entries unless the
+	// name was observed, but if an adopter does build them up manually
+	// they would all read 0/0. Suppress those — the framework-level
+	// "no successful runs" message is the real diagnosis.
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccessFunc(r.T, llmeval.EvalFuncResult{
+		Name: "demo",
+		Pass: false,
+		Runs: []llmeval.EvalFuncRunResult{{Err: errors.New("boom")}},
+		Assertions: []llmeval.AssertionRate{
+			{Name: "a", Passed: 0, Total: 0, MinRate: 1.0, Pass: false},
+		},
+	})
+
+	require.Len(t, r.messages, 1, "should report once, not once per assertion")
+	assert.Contains(t, r.messages[0], "no successful run")
+}
+
+func TestRequireSuccessFuncStillReportsFailedPostChecksWhenNoRunSucceeded(t *testing.T) {
+	// PostChecks operate on the aggregated result and can still fail
+	// meaningfully — e.g. MaxCost catching a runaway prompt cost even
+	// when every reply errored after the LLM call.
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccessFunc(r.T, llmeval.EvalFuncResult{
+		Name: "demo",
+		Pass: false,
+		Runs: []llmeval.EvalFuncRunResult{{Err: errors.New("boom")}},
+		PostChecks: []llmeval.PostCheckResult{
+			{Name: "max cost: $0.10", Pass: false, Reason: "spent $0.20"},
+		},
+	})
+
+	require.Len(t, r.messages, 2)
+	assert.Contains(t, r.messages[0], "no successful run")
+	assert.Contains(t, r.messages[1], `post-check "max cost: $0.10" failed`)
+}
+
 // ── Auto-log on failure ────────────────────────────────────────────────────
 
 func TestRequireSuccessFuncAutoLogsPrintTextOnFailure(t *testing.T) {

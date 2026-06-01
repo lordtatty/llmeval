@@ -57,6 +57,21 @@ func TestSUTErrorIsRecordedAndCausesEvalToFail(t *testing.T) {
 	assert.Error(t, result.Runs[0].Err)
 }
 
+func TestRunMarksResultFailedWhenEveryRunErroredAndNoAssertionsAreDeclared(t *testing.T) {
+	// An Eval[T] with declared assertions already fails when every run
+	// errors (the assertion ends up 0/0 → Pass=false). This test covers
+	// the edge case the assertion-based protection misses: zero declared
+	// assertions, zero criteria, only PostChecks (or nothing). Without
+	// the explicit guard, the eval would silently pass.
+	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
+		Run: func(context.Context) (string, error) { return "", errors.New("boom") },
+	})
+
+	require.Len(t, result.Runs, 1)
+	assert.Error(t, result.Runs[0].Err)
+	assert.False(t, result.Pass, "an eval with no successful runs cannot pass")
+}
+
 func TestSUTPanicDoesNotCrashTheTestProcessAndFailsTheEval(t *testing.T) {
 	result := llmeval.Run(context.Background(), llmeval.Eval[string]{
 		Run:        func(context.Context) (string, error) { panic("boom") },

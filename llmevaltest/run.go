@@ -94,6 +94,25 @@ func RequireSuccess[T any](t TestingT, result llmeval.EvalResult[T], opts ...Opt
 		_ = cfg.reporter(&buf, result)
 		t.Log(buf.String())
 	}
+	if len(result.Runs) > 0 && !anyRunSucceededReport(result.Runs) {
+		t.Errorf("eval %q: no successful run to evaluate (%d/%d errored)%s",
+			result.Name, len(result.Runs), len(result.Runs),
+			erroredRunDetails(result.Runs))
+	} else {
+		reportPerCheckFailures(t, result)
+	}
+	for _, pc := range result.PostChecks {
+		if !pc.Pass {
+			t.Errorf("eval %q: post-check %q failed%s",
+				result.Name, pc.Name, reasonSuffix("", pc.Reason))
+		}
+	}
+}
+
+// reportPerCheckFailures emits a t.Errorf for each failing assertion and
+// each failing criterion. Split out of RequireSuccess so the host stays
+// under the gocyclo limit once the all-errored branch is layered in.
+func reportPerCheckFailures[T any](t TestingT, result llmeval.EvalResult[T]) {
 	for i, a := range result.Assertions {
 		if !a.Pass {
 			t.Errorf("eval %q: assertion %q failed: %d/%d (need ≥%v)%s",
@@ -108,12 +127,33 @@ func RequireSuccess[T any](t TestingT, result llmeval.EvalResult[T], opts ...Opt
 				criterionFailureDetails(result.Runs, j))
 		}
 	}
-	for _, pc := range result.PostChecks {
-		if !pc.Pass {
-			t.Errorf("eval %q: post-check %q failed%s",
-				result.Name, pc.Name, reasonSuffix("", pc.Reason))
+}
+
+// anyRunSucceededReport reports whether any run completed without error.
+// Lifted into its own helper so RequireSuccess can decide between the
+// framework-level "no successful runs" diagnosis and the per-assertion
+// failure loop. The name avoids colliding with llmeval.anyRunSucceeded
+// (which operates on the same shape but lives in the core package).
+func anyRunSucceededReport[T any](runs []llmeval.RunResult[T]) bool {
+	for _, rr := range runs {
+		if rr.Err == nil {
+			return true
 		}
 	}
+	return false
+}
+
+// erroredRunDetails returns "\n  run N: <err>" lines for every errored
+// run, suitable for splicing into a single t.Errorf so the diagnosis
+// includes the underlying SUT failure reasons.
+func erroredRunDetails[T any](runs []llmeval.RunResult[T]) string {
+	var b strings.Builder
+	for i, rr := range runs {
+		if rr.Err != nil {
+			fmt.Fprintf(&b, "\n  run %d: %v", i+1, rr.Err)
+		}
+	}
+	return b.String()
 }
 
 // assertionFailureDetails returns a "\n  run N: <output> — <reason>" line for

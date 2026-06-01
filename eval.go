@@ -330,7 +330,7 @@ func Run[T any](ctx context.Context, eval Eval[T]) EvalResult[T] {
 		}
 	}
 
-	result.Pass = true
+	result.Pass = anyRunSucceeded(result.Runs)
 	for i, a := range eval.Assertions {
 		ar := assTallies.rate(i, a.MinPassRate())
 		result.Assertions = append(result.Assertions, AssertionRate{
@@ -513,6 +513,18 @@ func allCriteriaPassed(verdicts []CriterionResult) bool {
 		}
 	}
 	return true
+}
+
+// anyRunSucceeded reports whether at least one run completed without
+// error. An eval with zero successful runs has no positive evidence the
+// SUT works and must fail regardless of how few assertions were declared.
+func anyRunSucceeded[T any](runs []RunResult[T]) bool {
+	for _, rr := range runs {
+		if rr.Err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // applyJudge serializes the typed output via ser, calls the Judge, and

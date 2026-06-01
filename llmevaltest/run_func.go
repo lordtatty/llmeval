@@ -66,11 +66,17 @@ func RequireSuccessFunc(t TestingT, result llmeval.EvalFuncResult, opts ...Optio
 		_ = cfg.reporter(&buf, result)
 		t.Log(buf.String())
 	}
-	for _, a := range result.Assertions {
-		if !a.Pass {
-			t.Errorf("eval %q: assertion %q failed: %d/%d (need ≥%v)%s",
-				result.Name, a.Name, a.Passed, a.Total, a.MinRate,
-				assertionFailureDetailsFunc(result.Runs, a.Name))
+	if len(result.Runs) > 0 && !anyRunSucceededFunc(result.Runs) {
+		t.Errorf("eval %q: no successful run to evaluate (%d/%d errored)%s",
+			result.Name, len(result.Runs), len(result.Runs),
+			erroredRunDetailsFunc(result.Runs))
+	} else {
+		for _, a := range result.Assertions {
+			if !a.Pass {
+				t.Errorf("eval %q: assertion %q failed: %d/%d (need ≥%v)%s",
+					result.Name, a.Name, a.Passed, a.Total, a.MinRate,
+					assertionFailureDetailsFunc(result.Runs, a.Name))
+			}
 		}
 	}
 	for _, pc := range result.PostChecks {
@@ -79,6 +85,31 @@ func RequireSuccessFunc(t TestingT, result llmeval.EvalFuncResult, opts ...Optio
 				result.Name, pc.Name, reasonSuffix("", pc.Reason))
 		}
 	}
+}
+
+// anyRunSucceededFunc reports whether at least one run completed without
+// error. Used to decide between the framework-level "no successful runs"
+// failure message and the per-assertion 0/0 noise.
+func anyRunSucceededFunc(runs []llmeval.EvalFuncRunResult) bool {
+	for _, rr := range runs {
+		if rr.Err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// erroredRunDetailsFunc returns "\n  run N: <err>" lines for every errored
+// run, suitable for splicing into a single t.Errorf so the diagnosis
+// includes the underlying SUT failure reasons.
+func erroredRunDetailsFunc(runs []llmeval.EvalFuncRunResult) string {
+	var b strings.Builder
+	for i, rr := range runs {
+		if rr.Err != nil {
+			fmt.Fprintf(&b, "\n  run %d: %v", i+1, rr.Err)
+		}
+	}
+	return b.String()
 }
 
 // assertionFailureDetailsFunc returns a "\n  run N — <reason>" line for

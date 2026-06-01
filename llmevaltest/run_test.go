@@ -255,6 +255,66 @@ func TestErroredRunsAreNotReportedAsCriterionFailures(t *testing.T) {
 	assert.Contains(t, r.messages[0], "judge says no")
 }
 
+// ── All-errored runs ───────────────────────────────────────────────────────
+
+func TestRequireSuccessReportsAllErroredRunsAsAFrameworkFailure(t *testing.T) {
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
+		Name: "demo",
+		Pass: false,
+		Runs: []llmeval.RunResult[string]{
+			{Err: errors.New("rate limited")},
+			{Err: errors.New("connection refused")},
+		},
+	})
+
+	require.Len(t, r.messages, 1)
+	assert.Contains(t, r.messages[0], `eval "demo"`)
+	assert.Contains(t, r.messages[0], "2/2 errored")
+	assert.Contains(t, r.messages[0], "rate limited")
+	assert.Contains(t, r.messages[0], "connection refused")
+}
+
+func TestRequireSuccessSkipsNoisyAssertionAndCriterionMessagesWhenNoRunSucceeded(t *testing.T) {
+	// An Eval[T] with declared assertions whose every run errored ends up
+	// with 0/0 rates — the per-assertion "failed: 0/0" messages add noise
+	// over the real diagnosis ("no SUT call succeeded"). Suppress them.
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
+		Name: "demo",
+		Pass: false,
+		Runs: []llmeval.RunResult[string]{{Err: errors.New("boom")}},
+		Assertions: []llmeval.AssertionRate{
+			{Name: "a", Passed: 0, Total: 0, MinRate: 1.0, Pass: false},
+		},
+		Criteria: []llmeval.CriterionRate{
+			{Description: "c", Passed: 0, Total: 0, MinRate: 1.0, Pass: false},
+		},
+	})
+
+	require.Len(t, r.messages, 1)
+	assert.Contains(t, r.messages[0], "no successful run")
+}
+
+func TestRequireSuccessStillReportsFailedPostChecksWhenNoRunSucceeded(t *testing.T) {
+	r := captureErrorfMessages(t)
+
+	llmevaltest.RequireSuccess(r.T, llmeval.EvalResult[string]{
+		Name: "demo",
+		Pass: false,
+		Runs: []llmeval.RunResult[string]{{Err: errors.New("boom")}},
+		PostChecks: []llmeval.PostCheckResult{
+			{Name: "max cost: $0.10", Pass: false, Reason: "spent $0.20"},
+		},
+	})
+
+	require.Len(t, r.messages, 2)
+	assert.Contains(t, r.messages[0], "no successful run")
+	assert.Contains(t, r.messages[1], `post-check "max cost: $0.10" failed`)
+}
+
 // ── Failed PostCheck reporting ─────────────────────────────────────────────
 
 func TestRequireSuccessReportsOneErrorPerFailedPostCheck(t *testing.T) {
